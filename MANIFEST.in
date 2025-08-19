@@ -1,0 +1,7 @@
+include README.md
+include LICENSE
+include pyproject.toml
+recursive-include neutronapi *.py
+recursive-exclude neutronapi/tests *
+recursive-exclude apps *
+exclude manage.py

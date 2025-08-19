@@ -1,0 +1,204 @@
+"""
+Startproject command: scaffolds a new NeutronAPI project.
+
+Usage:
+  neutronapi startproject <project_name> [destination_dir]
+"""
+import os
+from typing import List
+
+
+MANAGE_PY = """#!/usr/bin/env python
+# manage.py (generated)
+import os
+import sys
+import asyncio
+import importlib
+from typing import Dict, Any
+
+# Add project root to path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+_APPS_DIR = os.path.join(os.path.dirname(__file__), 'apps')
+_REQUIRED_APP_FILES = [
+    os.path.join(_APPS_DIR, 'settings.py'),
+    os.path.join(_APPS_DIR, 'entry.py'),
+]
+
+
+def discover_commands() -> Dict[str, Any]:
+    commands: Dict[str, Any] = {}
+
+    # Built-in commands from installed neutronapi package
+    try:
+        base = os.path.join(os.path.dirname(__file__))
+        module = importlib.import_module
+        import pkgutil
+        import neutronapi.core.commands as _c  # ensure package is importable
+        for _, name, ispkg in pkgutil.iter_modules(_c.__path__):
+            if not ispkg:
+                try:
+                    m = importlib.import_module(f"neutronapi.core.commands.{name}")
+                    if hasattr(m, 'Command'):
+                        commands[name] = m.Command()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Project app-specific commands
+    apps_dir = os.path.join(os.path.dirname(__file__), 'apps')
+    if os.path.isdir(apps_dir):
+        for app_name in os.listdir(apps_dir):
+            app_commands_dir = os.path.join(apps_dir, app_name, 'commands')
+            if os.path.isdir(app_commands_dir):
+                for filename in os.listdir(app_commands_dir):
+                    if filename.endswith('.py') and not filename.startswith('__'):
+                        command_name = filename[:-3]
+                        try:
+                            module = importlib.import_module(f"apps.{app_name}.commands.{command_name}")
+                            if hasattr(module, 'Command'):
+                                commands[command_name] = module.Command()
+                        except ImportError:
+                            pass
+
+    return commands
+
+
+def main() -> None:
+    commands = discover_commands()
+
+    if len(sys.argv) < 2:
+        print("Available commands:")
+        for cmd in sorted(commands.keys()):
+            print(f"  {cmd}")
+        print("\nUse 'python manage.py <command> --help' for detailed usage")
+        return
+
+    command_name = sys.argv[1]
+    args = sys.argv[2:]
+
+    # Validate project files for project-scoped commands
+    if command_name != 'startproject':
+        missing = [p for p in _REQUIRED_APP_FILES if not os.path.isfile(p)]
+        if missing:
+            rel_missing = [os.path.relpath(p, os.path.dirname(__file__)) for p in missing]
+            print("Project misconfigured: required files missing.")
+            for p in rel_missing:
+                print(f"  - {p}")
+            sys.exit(1)
+
+    if command_name not in commands:
+        print(f"Unknown command: {command_name}")
+        print("Available commands:", ", ".join(sorted(commands.keys())))
+        sys.exit(1)
+
+    try:
+        command = commands[command_name]
+        if asyncio.iscoroutinefunction(command.handle):
+            asyncio.run(command.handle(args))
+        else:
+            command.handle(args)
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user.")
+        os._exit(1)
+    except Exception as e:
+        print(f"\nAn error occurred while running command '{command_name}': {e}")
+        if os.getenv("DEBUG", "False").lower() == "true":
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+SETTINGS_PY = '''"""
+Project settings for {project_name}.
+"""
+import os
+from pathlib import Path
+
+BASE_DIR = Path(os.getcwd())
+ENGINE = (os.getenv('DATABASE_PROVIDER') or 'aiosqlite').lower()
+IS_TESTING = os.getenv('TESTING', '0') == '1'
+
+if ENGINE == 'asyncpg':
+    DATABASES = {{
+        'default': {{
+            'ENGINE': 'asyncpg',
+            'NAME': os.getenv('PGDATABASE', 'temp_test'),
+            'HOST': os.getenv('PGHOST', '127.0.0.1'),
+            'PORT': int(os.getenv('PGPORT', '5432')),
+            'USER': os.getenv('PGUSER', 'postgres'),
+            'PASSWORD': os.getenv('PGPASSWORD', ''),
+        }}
+    }}
+else:
+    default_name = ':memory:' if IS_TESTING else str(BASE_DIR / 'db.sqlite3')
+    DATABASES = {{
+        'default': {{
+            'ENGINE': 'aiosqlite',
+            'NAME': default_name,
+            'OPTIONS': {{
+                'PRAGMAS': {{
+                    'journal_mode': 'MEMORY' if IS_TESTING else 'WAL',
+                    'synchronous': 'OFF' if IS_TESTING else 'NORMAL',
+                }},
+                'uri': False,
+            }},
+        }}
+    }}
+'''
+
+
+ENTRY_PY = '''"""
+Application entry for {project_name}.
+"""
+# Entry point for the application
+APP_ENTRY_MARKER = True
+'''
+
+
+class Command:
+    def __init__(self):
+        self.help = "Create a new NeutronAPI project"
+
+    def handle(self, args: List[str]) -> None:
+        if not args:
+            print("Usage: neutronapi startproject <project_name> [destination_dir]")
+            return
+
+        project_name = args[0]
+        dest = args[1] if len(args) > 1 else project_name
+
+        if os.path.exists(dest) and os.listdir(dest):
+            print(f"Destination '{dest}' already exists and is not empty.")
+            return
+
+        os.makedirs(os.path.join(dest, 'apps'), exist_ok=True)
+
+        # manage.py
+        manage_path = os.path.join(dest, 'manage.py')
+        with open(manage_path, 'w') as f:
+            f.write(MANAGE_PY)
+        try:
+            os.chmod(manage_path, 0o755)
+        except Exception:
+            pass
+
+        # apps/__init__.py
+        with open(os.path.join(dest, 'apps', '__init__.py'), 'w') as f:
+            f.write("")
+
+        # apps/settings.py
+        with open(os.path.join(dest, 'apps', 'settings.py'), 'w') as f:
+            f.write(SETTINGS_PY.format(project_name=project_name))
+
+        # apps/entry.py
+        with open(os.path.join(dest, 'apps', 'entry.py'), 'w') as f:
+            f.write(ENTRY_PY.format(project_name=project_name))
+
+        print(f"✓ Project '{project_name}' created at '{dest}'.")
+        print("Next steps:")
+        print(f"  cd {dest}")
+        print("  python manage.py migrate   # when DB layer is configured")
+        print("  python manage.py test")
+
