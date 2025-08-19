@@ -119,7 +119,7 @@ app = Application(
     apis={"ping": PingAPI()},
     tasks={"cleanup": CleanupTask()}
 )
-
+```
 ## Database Models
 
 ```python
@@ -130,8 +130,6 @@ class User(Model):
     name = CharField(max_length=100)
     age = IntegerField()
     created_at = DateTimeField(auto_now_add=True)
-    
-    # Table name inferred from class name (user -> users)
 ```
 
 ## Server Commands
@@ -153,8 +151,6 @@ python manage.py start --host 0.0.0.0 --port 8080 --workers 4
 # SQLite (default)
 python manage.py test
 
-# PostgreSQL (auto Docker bootstrap)
-DATABASE_PROVIDER=asyncpg python manage.py test
 
 # Specific tests
 python manage.py test app.tests.test_models.TestUser.test_creation

@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 """
-Thin manage.py shim, Django-style.
-
 Delegates to neutronapi.cli for command discovery and execution.
 Keeps project validation inside commands or the central CLI, not here.
 """
