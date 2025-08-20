@@ -103,7 +103,7 @@ def main() -> None:
 
     # Validate project layout only for project-scoped commands
     # Keep 'test' and other generic commands runnable without a project scaffold
-    requires_project = {"migrate", "startapp", "shell"}
+    requires_project = {"migrate", "makemigrations", "startapp", "shell"}
     if command_name in requires_project:
         missing = [p for p in _project_required_files() if not os.path.isfile(p)]
         if missing:
