@@ -81,12 +81,16 @@ from neutronapi.application import Application
 from neutronapi.base import API
 
 class MainAPI(API):
+    resource = ""  # Root path
+    
     @API.endpoint("/", methods=["GET"])
-    async def hello(self, scope, receive, send):
+    async def hello(self, scope, receive, send, **kwargs):
         return await self.response({{"message": "Hello from {project_name}!"}})
 
-# Create the application with the API
-app = Application(apis={{"": MainAPI()}})
+# Create the application with clean array syntax
+app = Application(apis=[
+    MainAPI(),
+])
 '''
         
         with open(os.path.join(dest, 'apps', 'entry.py'), 'w') as f:

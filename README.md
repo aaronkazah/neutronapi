@@ -1,6 +1,6 @@
 # NeutronAPI
 
-**High-performance Python framework built directly on uvicorn with built-in database models, migrations, and background tasks. If you want Django that was built async-first, this is for you.**
+**High-performance Python framework built directly on uvicorn with built-in database models, migrations, and background tasks. If you want Django if it was built async-first, this is for you.**
 
 Batteries included async API framework with command-line management.
 
@@ -61,14 +61,15 @@ DATABASES = {
 from neutronapi.base import API
 
 class PostAPI(API):
+    resource = "/posts"
     name = "posts"
     
-    @API.endpoint("/posts", methods=["GET"])
+    @API.endpoint("/", methods=["GET"])
     async def list_posts(self, scope, receive, send, **kwargs):
         posts = [{"id": 1, "title": "Hello World"}]
         return await self.response(posts)
     
-    @API.endpoint("/posts", methods=["POST"])
+    @API.endpoint("/", methods=["POST"])
     async def create_post(self, scope, receive, send, **kwargs):
         # Get request data from scope["body"]
         return await self.response({"id": 2, "title": "New Post"})
@@ -79,9 +80,9 @@ class PostAPI(API):
 from neutronapi.application import Application
 from apps.posts.api import PostAPI
 
-app = Application({
-    "posts": PostAPI()
-})
+app = Application(apis=[
+    PostAPI()  # resource = "/posts" defined in class
+])
 ```
 
 **6. Start Server**
@@ -106,6 +107,8 @@ myproject/
 
 ```python
 from neutronapi.background import Task, TaskFrequency
+from neutronapi.base import API
+from neutronapi.application import Application
 
 class CleanupTask(Task):
     name = "cleanup"
@@ -114,9 +117,16 @@ class CleanupTask(Task):
     async def run(self, **kwargs):
         print("Cleaning up logs...")
 
-# Add to application
+class PingAPI(API):
+    resource = "/ping"
+    
+    @API.endpoint("/", methods=["GET"])
+    async def ping(self, scope, receive, send, **kwargs):
+        return await self.response({"status": "ok"})
+
+# Add to application  
 app = Application(
-    apis={"ping": PingAPI()},
+    apis=[PingAPI()],
     tasks={"cleanup": CleanupTask()}
 )
 ```
