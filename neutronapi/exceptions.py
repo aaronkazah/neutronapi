@@ -25,13 +25,13 @@ class ValidationError(APIException):
     status_code = 400
 
     def __init__(self, message: str = "Validation error", error_type: str | None = None):
-        self.error_type = error_type
+        self.error_type = error_type or "validation_error"
         super().__init__(message)
 
     def to_dict(self):
         return {
             "error": {
-                "type": self.error_type or self.__class__.__name__.lower(),
+                "type": self.error_type,
                 "message": self.message,
             }
         }
@@ -56,7 +56,7 @@ class PermissionDenied(APIException):
     status_code = 403
 
     def __init__(self, message: str = "Permission denied"):
-        super().__init__(message)
+        super().__init__(message, type="permission_denied")
 
 
 class AuthenticationFailed(APIException):
@@ -64,7 +64,7 @@ class AuthenticationFailed(APIException):
     status_code = 401
 
     def __init__(self, message: str = "Authentication failed"):
-        super().__init__(message)
+        super().__init__(message, type="authentication_failed")
 
 
 class MethodNotAllowed(APIException):
@@ -86,30 +86,10 @@ class Throttled(APIException):
 
     def __init__(self, message: str = "Request throttled", wait: int | None = None):
         self.wait = wait
-        super().__init__(message)
+        super().__init__(message, type="throttled", status=429)
 
 
-class ResourceError(APIException):
-    """Resource error with response payload."""
-    status_code = 500
-
-    def __init__(self, response, status_code: int | None = None):
-        self.response = response
-        self.status_code = status_code or self.status_code
-
-        # Extract message from response if available
-        message = "Resource error"
-        if isinstance(response, dict):
-            if "error" in response:
-                error_info = response["error"]
-                if isinstance(error_info, dict) and "message" in error_info:
-                    message = error_info["message"]
-                elif isinstance(error_info, str):
-                    message = error_info
-            elif "message" in response:
-                message = response["message"]
-
-        super().__init__(message, "resource_error", self.status_code)
+# Note: no non-standard exceptions like ResourceError are defined; rely on APIException if needed.
 
 
 class DoesNotExist(Exception):

@@ -722,16 +722,11 @@ class API:
             else:
                 raise ValueError(f"Invalid response type: {type(response)}")
 
-        except exceptions.ValidationError as e:
+        except exceptions.APIException as e:
+            # Unified API error shape
             response = Response(
-                body={"error": {"type": "validation_error", "message": str(e)}},
-                status_code=400,
-            )
-            return await response(scope, receive, send)
-        except exceptions.AuthenticationFailed as e:
-            response = Response(
-                body={"error": {"type": "authentication_failed", "message": str(e)}},
-                status_code=401,
+                body=e.to_dict(),
+                status_code=getattr(e, "status_code", 500),
             )
             return await response(scope, receive, send)
 
