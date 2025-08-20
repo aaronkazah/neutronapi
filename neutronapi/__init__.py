@@ -1,13 +1,13 @@
 """NeutronAPI - High-performance Python framework built directly on uvicorn.
 
-If you want Django that was built async-first, this is for you.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.3"
 
 from .base import API, Response, Endpoint
 from .application import Application
 from .background import Background, Task, TaskFrequency, TaskPriority
+from .http import Status
 
 __all__ = [
     'API',
@@ -18,4 +18,5 @@ __all__ = [
     'Task',
     'TaskFrequency',
     'TaskPriority',
+    'Status',
 ]
