@@ -794,7 +794,8 @@ class API:
                 )
 
         if not matched_handlers:
-            raise exceptions.NotFound(path)
+            # Use default NotFound message for consistency
+            raise exceptions.NotFound()
 
         for (
             handler,
@@ -821,7 +822,7 @@ class API:
         if matched_handlers:
             raise exceptions.MethodNotAllowed(method, path)
 
-        raise exceptions.NotFound(path)
+        raise exceptions.NotFound()
 
     @staticmethod
     async def response(

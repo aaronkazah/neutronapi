@@ -2,7 +2,8 @@ from typing import Dict, Optional, Callable, List, Any, Union
 import warnings
 import asyncio
 
-from neutronapi.base import API
+from neutronapi.base import API, Response
+from neutronapi import exceptions
 from neutronapi.middleware.cors import CORS
 from neutronapi.middleware.routing import RoutingMiddleware
 from neutronapi.middleware.allowed_hosts import AllowedHostsMiddleware
@@ -100,16 +101,10 @@ class Application:
                         await api.handle(scope, receive, send)
                         return
                 
-                # Default 404 for unmatched paths
-                await send({
-                    "type": "http.response.start",
-                    "status": 404,
-                    "headers": [[b"content-type", b"text/plain"]],
-                })
-                await send({
-                    "type": "http.response.body",
-                    "body": b"Not Found",
-                })
+                # Default 404 for unmatched paths - return consistent JSON error
+                err = exceptions.NotFound().to_dict()
+                resp = Response(body=err, status_code=404)
+                await resp(scope, receive, send)
         
         # Skip hosts middleware if no allowed_hosts specified (for testing)
         if allowed_hosts:
