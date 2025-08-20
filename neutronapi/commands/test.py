@@ -41,14 +41,22 @@ class Command:
 
     def _bootstrap_sqlite(self):
         # Use in-memory sqlite as the default test DB
+        import os
+        from neutronapi.db import setup_databases
+        os.environ['TESTING'] = '1'  # Ensure ConnectionsManager prefers :memory:
         try:
-            import os
-            os.environ['TESTING'] = '1'  # Set testing flag
-            from apps.settings import DATABASES
-            from neutronapi.db import setup_databases
+            from apps.settings import DATABASES  # Optional, if running inside a project
             setup_databases(DATABASES)
-        except Exception as e:
-            print(f"Warning: could not bootstrap sqlite test DB: {e}")
+            return
+        except Exception:
+            # Fall back to a guaranteed in-memory configuration even if a manager already exists
+            test_config = {
+                'default': {
+                    'ENGINE': 'aiosqlite',
+                    'NAME': ':memory:',
+                }
+            }
+            setup_databases(test_config)
 
     def _bootstrap_postgres(self):
         # Start a disposable PostgreSQL in Docker if available

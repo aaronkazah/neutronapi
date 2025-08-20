@@ -1,15 +1,15 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-Delegates to neutronapi.cli for command discovery and execution.
-Keeps project validation inside commands or the central CLI, not here.
+Minimal manage.py that forwards to neutronapi CLI main.
 """
 import sys
 
 
-def main() -> None:
+def main():
     from neutronapi.cli import main as cli_main
     cli_main()
 
 
 if __name__ == "__main__":
     main()
+

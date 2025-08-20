@@ -1,6 +1,6 @@
 """
-Django-style migrate command.
-Apply database migrations.
+File-based migrate command with hash tracking.
+Apply database migrations from numbered files.
 """
 import asyncio
 import os
@@ -8,24 +8,31 @@ from typing import List
 
 
 class Command:
-    """Django-style migrate command class."""
+    """File-based migrate command class."""
 
     def __init__(self):
-        self.help = "Apply database migrations"
+        self.help = "Apply database migrations from numbered files (001_initial.py, 002_add_users.py, etc.)"
 
     async def handle(self, args: List[str]) -> None:
         """
-        Apply database migrations.
+        Apply database migrations from numbered migration files.
         
         Usage:
             python manage.py migrate                # Apply all pending migrations
-            python manage.py migrate app_name       # Apply migrations for specific app
+            python manage.py migrate --show         # Show all discovered migrations
             python manage.py migrate --help         # Show help
         
+        Migration files should be named like:
+            apps/core/migrations/001_initial.py
+            apps/core/migrations/002_add_users.py
+            apps/blog/migrations/001_initial.py
+        
+        The system tracks applied migrations by file hash - if you modify a migration
+        file, it will be re-applied automatically.
+        
         Examples:
-            python manage.py migrate
-            python manage.py migrate core
-            python manage.py migrate my_app
+            python manage.py migrate               # Apply all migrations
+            python manage.py migrate --show        # List all migration files
         """
         
         # Show help if requested
@@ -34,12 +41,12 @@ class Command:
             print(self.handle.__doc__)
             return
         
-        print("Applying database migrations...")
-        
         try:
-            from neutronapi.db.migrations import MigrationManager
+            from neutronapi.db.migration_tracker import MigrationTracker
             from neutronapi.db import setup_databases
-            # Use Django-style settings for configuration
+            from neutronapi.db.connection import get_databases
+            
+            # Use settings for configuration
             try:
                 from apps.settings import DATABASES
             except Exception:
@@ -49,25 +56,26 @@ class Command:
             if DATABASES:
                 setup_databases(DATABASES)
             
-            # Determine which apps to migrate
-            if args:
-                apps = args
-                print(f"Migrating apps: {', '.join(apps)}")
-            else:
-                # Auto-discover apps
-                apps = None
-                print("Auto-discovering and migrating all apps...")
+            # Create migration tracker
+            tracker = MigrationTracker(base_dir="apps")
             
-            # Create migration manager
-            manager = MigrationManager(apps=apps, base_dir="apps")
+            # Handle --show option
+            if args and args[0] == "--show":
+                print("Discovered migration files:")
+                tracker.show_migrations()
+                return
             
-            # Run migrations
-            processed_count = await manager.bootstrap_all(test_mode=False)
+            # Get database connection
+            connection = await get_databases().get_connection('default')
             
-            if processed_count > 0:
-                print(f"✓ Migrations applied successfully for {processed_count} app(s)!")
-            else:
-                print("No migrations needed - all apps are up to date.")
+            try:
+                print("Scanning for migration files...")
+                
+                # Run migrations
+                await tracker.migrate(connection)
+                
+            finally:
+                await connection.close()
             
         except ImportError as e:
             print(f"Error: Could not import migration modules: {e}")
@@ -75,6 +83,8 @@ class Command:
             return
         except Exception as e:
             print(f"Error applying migrations: {e}")
+            import traceback
+            traceback.print_exc()
             if os.getenv("DEBUG", "False").lower() == "true":
                 import traceback
                 traceback.print_exc()

@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Callable, List, Any
+from typing import Dict, Optional, Callable, List, Any, Union
 import asyncio
 
 from neutronapi.base import API
@@ -38,7 +38,7 @@ class Application:
 
     def __init__(
         self,
-        apis: Optional[List[API]] = None,
+        apis: Optional[Union[Dict[str, API], List[API]]] = None,
         *,
         tasks: Optional[Dict[str, Any]] = None,
         version: str = "1.0.0",
@@ -67,13 +67,18 @@ class Application:
                 ProductsAPI(),   # resource = "/v1/products"  
             ])
         """
-        # Convert API list to internal dict mapping
-        self.apis = {}
+        # Convert provided APIs (list or dict) into internal {resource: api} mapping
+        self.apis: Dict[str, API] = {}
         if apis:
-            for api in apis:
-                if not hasattr(api, 'resource') or api.resource is None:
+            # Support both list[API] and dict[str, API]
+            api_iterable = apis.values() if isinstance(apis, dict) else apis
+            for api in api_iterable:
+                if not hasattr(api, 'resource'):
                     raise ValueError(f"API {api.__class__.__name__} must have a 'resource' attribute")
-                self.apis[api.resource] = api
+                resource = getattr(api, 'resource', None)
+                if resource is None:
+                    raise ValueError(f"API {api.__class__.__name__} must define a non-null 'resource'")
+                self.apis[resource] = api
             
         self.version = version
         
@@ -148,7 +153,7 @@ class Application:
 
 
 def create_application(
-    apis: Dict[str, API],
+    apis: Union[Dict[str, API], List[API]],
     static_hosts: Optional[List[str]] = None,
     static_resolver: Optional[Callable] = None,
     allowed_hosts: Optional[List[str]] = None,
@@ -160,7 +165,7 @@ def create_application(
     Docs are not injected automatically; pass your own docs API if desired.
     """
     return Application(
-        apis,
+        apis=apis,
         version=version,
         allowed_hosts=allowed_hosts,
         static_hosts=static_hosts,
