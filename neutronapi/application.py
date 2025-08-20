@@ -1,4 +1,5 @@
 from typing import Dict, Optional, Callable, List, Any, Union
+import warnings
 import asyncio
 
 from neutronapi.base import API
@@ -160,10 +161,17 @@ def create_application(
     version: str = "1.0.0",
     expose_docs: bool = False,  # kept for compatibility; no-op
 ):
-    """Compatibility wrapper that returns an Application instance.
+    """Deprecated compatibility wrapper for creating an Application.
 
+    Deprecated in 0.1.3: use Application(apis=[...]) or Application(apis={...}) directly.
     Docs are not injected automatically; pass your own docs API if desired.
     """
+    warnings.warn(
+        "create_application is deprecated as of 0.1.3; "
+        "construct Application directly with list or dict of APIs.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return Application(
         apis=apis,
         version=version,
