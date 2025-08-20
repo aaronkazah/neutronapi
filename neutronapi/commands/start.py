@@ -38,12 +38,17 @@ class Command:
             print("Install it with: pip install uvicorn")
             sys.exit(1)
         
-        # Import the application
+        # Get the entry point string from settings
         try:
-            from apps.entry import app
-        except ImportError:
-            print("Error: Could not import app from apps.entry")
-            print("Make sure apps/entry.py exists and defines an 'app' variable.")
+            from neutronapi.conf import settings
+            entry_point = getattr(settings, 'ENTRY', 'apps.entry:app')
+        except (ImportError, AttributeError) as e:
+            print(f"Error: Could not load settings: {e}")
+            print("\nTroubleshooting:")
+            print("1. Make sure your settings module exists (default: apps/settings.py)")
+            print("2. Make sure ENTRY is defined in settings (e.g., ENTRY = 'apps.entry:app')")
+            print("3. You can set NEUTRONAPI_SETTINGS_MODULE environment variable to point to your settings")
+            print("   Example: export NEUTRONAPI_SETTINGS_MODULE=myproject.settings")
             sys.exit(1)
         
         # Check for production mode
@@ -66,8 +71,7 @@ class Command:
                 "workers": workers,
                 "access_log": True,
                 "log_level": "warning",  # Less verbose in production
-                "loop": "uvloop",  # Faster event loop if available
-                "http": "httptools",  # Faster HTTP parser if available
+                # Don't force specific loop/http - let uvicorn decide based on availability
             }
             print(f"Starting production server with {workers} workers...")
         else:
@@ -201,6 +205,22 @@ class Command:
             
             i += 1
         
+        # Determine app or import string based on reload mode or workers
+        if uvicorn_kwargs.get("reload", True) or uvicorn_kwargs.get("workers", 1) > 1:
+            # For reload mode or multiple workers, use the entry point string directly
+            app_or_import_string = entry_point
+        else:
+            # For single worker non-reload mode, we can import the app object
+            try:
+                from neutronapi.conf import get_app_from_entry
+                app_or_import_string = get_app_from_entry(entry_point)
+            except (ImportError, AttributeError, ValueError) as e:
+                print(f"Error: Could not load application: {e}")
+                print("\nTroubleshooting:")
+                print("1. Make sure your entry module exists and defines the app variable")
+                print(f"2. Check that '{entry_point}' is correct")
+                sys.exit(1)
+
         # Show startup message
         mode = "production" if production_mode else "development"
         print(f"Starting {mode} server at http://{uvicorn_kwargs['host']}:{uvicorn_kwargs['port']}/")
@@ -211,7 +231,7 @@ class Command:
         
         # Run the server
         try:
-            uvicorn.run(app, **uvicorn_kwargs)
+            uvicorn.run(app_or_import_string, **uvicorn_kwargs)
         except KeyboardInterrupt:
             print("\nServer stopped.")
         except Exception as e:

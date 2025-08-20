@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neutronapi"
-version = "0.1.0"
+version = "0.1.1"
 description = "High-performance Python framework built directly on uvicorn with built-in database models, migrations, and background tasks. Django that was built async-first."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -28,6 +28,7 @@ classifiers = [
 ]
 dependencies = [
   "uvicorn[standard]>=0.23.0",
+  "uvloop>=0.17.0",
   "aiosqlite>=0.19.0",
   "PyJWT>=2.8.0",
 ]

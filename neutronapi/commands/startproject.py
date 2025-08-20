@@ -58,6 +58,9 @@ Settings for {project_name}.
 """
 import os
 
+# Application entry point
+ENTRY = "apps.entry:app"
+
 # Database configuration
 DATABASES = {{
     'default': {{
@@ -74,8 +77,16 @@ DATABASES = {{
         entry_content = f'''"""
 Entry point for {project_name}.
 """
-# Your application entry point goes here
-APP_ENTRY_MARKER = True
+from neutronapi.application import Application
+from neutronapi.base import API
+
+class MainAPI(API):
+    @API.endpoint("/", methods=["GET"])
+    async def hello(self, scope, receive, send):
+        return await self.response({{"message": "Hello from {project_name}!"}})
+
+# Create the application with the API
+app = Application(apis={{"": MainAPI()}})
 '''
         
         with open(os.path.join(dest, 'apps', 'entry.py'), 'w') as f:
