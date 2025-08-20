@@ -17,36 +17,36 @@ class Command:
     def handle(self, args: List[str]) -> None:
         """
         Launch an interactive Python shell with the project initialized.
-        
+
         Usage:
             python manage.py shell              # Start interactive shell
             python manage.py shell --help       # Show help
-        
+
         In the shell, you can use:
             from neutronapi.db import setup_databases, get_databases
             from neutronapi.db.models import Model
             from neutronapi.db.migrations import MigrationManager
-            
+
             # Setup database
             setup_databases()
             manager = MigrationManager()
             await manager.bootstrap_all()
         """
-        
+
         # Show help if requested
         if args and args[0] in ["--help", "-h", "help"]:
             print(f"{self.help}\n")
             print(self.handle.__doc__)
             return
-        
+
         print("Starting interactive Python shell...")
         print("Project modules are available for import.")
         print("Use Ctrl+D or exit() to quit.")
         print()
-        
+
         # Set up environment
         os.environ.setdefault("PYTHONPATH", os.getcwd())
-        
+
         # Prepare startup script
         startup_code = """
 # Auto-imported modules for convenience
@@ -71,28 +71,27 @@ print("  manager = MigrationManager()  # Create migration manager")
 print("  await manager.bootstrap_all()  # Bootstrap all apps")
 print()
 """
-        
+
         # Write startup script to a temporary file
         startup_file = "/tmp/django_shell_startup.py"
         with open(startup_file, "w") as f:
             f.write(startup_code)
-        
+
         # Set PYTHONSTARTUP to load our script
         env = os.environ.copy()
         env["PYTHONSTARTUP"] = startup_file
-        
+
         # Launch Python shell with asyncio support
         try:
             # Try IPython first (nicer interface)
             try:
-                import IPython
                 print("Starting IPython shell...")
                 subprocess.run([sys.executable, "-m", "IPython"], env=env)
             except ImportError:
                 # Fallback to regular Python with asyncio
                 print("Starting Python shell with asyncio support...")
                 subprocess.run([sys.executable, "-m", "asyncio"], env=env)
-        
+
         except KeyboardInterrupt:
             print("\nShell interrupted by user")
         except Exception as e:

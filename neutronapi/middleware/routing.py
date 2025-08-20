@@ -2,7 +2,7 @@
 import re
 import logging
 import asyncio
-from typing import Callable, Dict, List, Optional, Union, Pattern, Any
+from typing import Callable, Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 

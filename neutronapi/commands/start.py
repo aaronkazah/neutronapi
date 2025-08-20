@@ -13,31 +13,31 @@ class Command:
     def handle(self, args: List[str]) -> None:
         """
         Start ASGI server with uvicorn.
-        
+
         Usage:
             python manage.py start                        # Development mode with reload
             python manage.py start --production           # Production mode (auto workers, optimized)
             python manage.py start --production --workers 8  # Production with custom workers
             python manage.py start --host 0.0.0.0         # Custom host
             python manage.py start --port 8080            # Custom port
-        
+
         Production mode automatically sets:
         - Multiple workers (CPU count * 2 + 1)
         - Host 0.0.0.0 (accept external connections)
         - Optimized event loop and HTTP parser
         - Warning-level logging
         - No auto-reload
-        
+
         All options can be overridden. Supports all uvicorn options.
         """
-        
+
         try:
             import uvicorn
         except ImportError:
             print("Error: uvicorn is required to run the server.")
             print("Install it with: pip install uvicorn")
             sys.exit(1)
-        
+
         # Get the entry point string from settings
         try:
             from neutronapi.conf import settings
@@ -50,20 +50,20 @@ class Command:
             print("3. You can set NEUTRONAPI_SETTINGS_MODULE environment variable to point to your settings")
             print("   Example: export NEUTRONAPI_SETTINGS_MODULE=myproject.settings")
             sys.exit(1)
-        
+
         # Check for production mode
         production_mode = False
         if "--production" in args:
             production_mode = True
             args = [arg for arg in args if arg != "--production"]  # Remove --production flag
-        
+
         # Default settings
         if production_mode:
             # Production defaults - optimized for deployment
             import multiprocessing
             cpu_count = multiprocessing.cpu_count()
             workers = cpu_count * 2 + 1  # Common formula for async apps
-            
+
             defaults = {
                 "host": "0.0.0.0",
                 "port": 8000,
@@ -77,21 +77,21 @@ class Command:
         else:
             # Development defaults
             defaults = {
-                "host": "127.0.0.1", 
+                "host": "127.0.0.1",
                 "port": 8000,
                 "reload": True,
                 "access_log": True,
                 "log_level": "info",
             }
             print("Starting development server with auto-reload...")
-        
+
         # Parse uvicorn-style arguments
         uvicorn_kwargs = defaults.copy()
-        
+
         i = 0
         while i < len(args):
             arg = args[i]
-            
+
             if arg == "--help":
                 print(self.handle.__doc__)
                 print("\nUvicorn options:")
@@ -202,9 +202,9 @@ class Command:
                     except ValueError:
                         print(f"Error: Invalid address '{arg}'")
                         return
-            
+
             i += 1
-        
+
         # Determine app or import string based on reload mode or workers
         if uvicorn_kwargs.get("reload", True) or uvicorn_kwargs.get("workers", 1) > 1:
             # For reload mode or multiple workers, use the entry point string directly
@@ -228,7 +228,7 @@ class Command:
             print("Auto-reload enabled. Quit with CONTROL-C.")
         else:
             print("Quit the server with CONTROL-C.")
-        
+
         # Run the server
         try:
             uvicorn.run(app_or_import_string, **uvicorn_kwargs)

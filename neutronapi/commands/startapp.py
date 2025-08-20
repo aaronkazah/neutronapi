@@ -47,4 +47,3 @@ class Command:
             f.write(MODELS_TEMPLATE.format(app_name=app_name))
 
         print(f"✓ App '{app_name}' created at apps/{app_name}")
-

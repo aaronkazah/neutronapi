@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neutronapi"
-version = "0.1.4"
-description = "High-performance Python framework built directly on uvicorn with built-in database models, migrations, and background tasks. Django if it was built async-first."
+version = "0.1.5"
+description = "A fast Python web framework that's like Django, but built for modern async applications."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
@@ -47,3 +47,48 @@ include-package-data = true
 where = ["."]
 include = ["neutronapi*"]
 exclude = ["apps*", "neutronapi/core/tests*"]
+
+# Code style and linting
+[tool.black]
+line-length = 88
+target-version = ["py39", "py310", "py311", "py312"]
+include = '\\.pyi?$'
+force-exclude = '^(?!neutronapi/).*'
+exclude = '''
+/(
+  \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | venv
+  | _build
+  | buck-out
+  | build
+  | dist
+  | neutronapi.egg-info
+  | apps
+)/
+'''
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "W503"]
+filename = [
+  "neutronapi/*.py",
+  "neutronapi/**/*.py",
+]
+exclude = [
+  ".git",
+  "__pycache__",
+  "build",
+  "dist",
+  "venv",
+  ".venv",
+  ".tox",
+  "neutronapi.egg-info",
+  "apps",
+  "neutronapi/tests",
+  "neutronapi/db",
+  "neutronapi/openapi",
+]

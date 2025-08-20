@@ -11,7 +11,7 @@ from .http import Status
 
 __all__ = [
     'API',
-    'Response', 
+    'Response',
     'Endpoint',
     'Application',
     'Background',

@@ -59,7 +59,8 @@ class PostgreSQLProvider(BaseProvider):
             raise ConnectionError(f"Failed to connect to PostgreSQL: {e}") from e
 
     async def _get_pool(self):
-        import asyncio, asyncpg, os
+        import asyncio
+        import asyncpg
         loop = asyncio.get_running_loop()
         async with self._pool_lock:
             if self._pool is not None and self._loop is not loop:

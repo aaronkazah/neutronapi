@@ -6,7 +6,7 @@ This module provides functionality to convert OpenAPI 3.0+ specifications
 to Swagger 2.0 format for backward compatibility with older tools and clients.
 """
 
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List
 import copy
 
 

@@ -1,6 +1,5 @@
 import unittest
-import os
-from neutronapi.db.queryset import QuerySet, Q
+from neutronapi.db.queryset import QuerySet
 from neutronapi.db.connection import get_databases
 
 

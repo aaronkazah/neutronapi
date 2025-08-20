@@ -409,13 +409,9 @@ class SQLiteProvider(BaseProvider):
         from ..fields import (
             BooleanField,
             VectorField,
-            JSONField,
             CharField,
-            TextField,
             IntegerField,
             DateTimeField,
-            EnumField,
-            BaseField,
             FloatField,
             BinaryField,
         )

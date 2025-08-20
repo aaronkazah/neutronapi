@@ -1,7 +1,6 @@
 import os
 import shutil
 import tempfile
-import unittest
 import hashlib
 
 from unittest import IsolatedAsyncioTestCase

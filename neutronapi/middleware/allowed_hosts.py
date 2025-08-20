@@ -15,7 +15,7 @@ except Exception:  # pragma: no cover - fallback for library-only context
 class AllowedHostsMiddleware:
     """Django-style ALLOWED_HOSTS validation middleware."""
 
-    def __init__(self, app: Callable, allowed_hosts: List[str] = None):
+    def __init__(self, app: Callable | None = None, allowed_hosts: List[str] = None):
         self.app = app
         self._custom_allowed_hosts = allowed_hosts
         self.debug = getattr(settings, "DEBUG", False)

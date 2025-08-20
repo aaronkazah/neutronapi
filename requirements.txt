@@ -6,3 +6,9 @@ PyJWT>=2.8.0
 
 # Optional dependencies
 asyncpg>=0.29.0  # For PostgreSQL support
+
+# Dev tools
+black>=24.0.0
+flake8>=7.0.0
+autopep8>=2.0.0
+autoflake>=2.0.0

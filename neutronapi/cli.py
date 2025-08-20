@@ -24,10 +24,11 @@ def _project_required_files() -> list[str]:
         os.path.join(apps_dir, 'entry.py'),
     ]
 
+
 def _discover_commands_from(prefix: str, exclude_cli_only: bool = False) -> Dict[str, Any]:
     commands: Dict[str, Any] = {}
     cli_only_commands = {'startproject'}  # Commands only available via CLI, not manage.py
-    
+
     try:
         import pkgutil
         pkg = importlib.import_module(f"{prefix}.commands")
@@ -36,7 +37,7 @@ def _discover_commands_from(prefix: str, exclude_cli_only: bool = False) -> Dict
                 # Skip CLI-only commands if requested
                 if exclude_cli_only and name in cli_only_commands:
                     continue
-                    
+
                 try:
                     module = importlib.import_module(f"{prefix}.commands.{name}")
                     if hasattr(module, 'Command'):
@@ -81,7 +82,7 @@ def discover_commands() -> Dict[str, Any]:
 def main() -> None:
     # Load commands first so startproject can run outside a project
     commands = discover_commands()
-    
+
     # Add CLI-only commands (not available in manage.py)
     from neutronapi.commands import startproject
     commands['startproject'] = startproject.Command()

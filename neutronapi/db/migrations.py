@@ -15,7 +15,7 @@ from typing import List, Type, Dict, Set, Optional
 from enum import Enum
 
 from neutronapi.db.fields import EnumField, BaseField
-from neutronapi.db.connection import get_databases, DatabaseType, CONNECTIONS
+from neutronapi.db.connection import get_databases, DatabaseType
 from neutronapi.db.models import Model  # Import Model
 
 
@@ -81,19 +81,16 @@ class Operation(ABC):
         self, app_label, provider, from_state, to_state, connection
     ):
         """Performs the database operation forwards."""
-        pass
 
     @abstractmethod
     async def database_backwards(
         self, app_label, provider, from_state, to_state, connection
     ):
         """Performs the database operation in reverse."""
-        pass
 
     @abstractmethod
     def describe(self):
         """Returns a human-readable description of the operation."""
-        pass
 
 
 class CreateModel(Operation):
@@ -154,7 +151,6 @@ class DeleteModel(Operation):
         print(
             f"  Skipping re-creation of model '{self.model_name}' in backwards migration."
         )
-        pass
 
     def describe(self):
         return f"DeleteModel(model_name='{self.model_name}')"  # Use original name
@@ -216,7 +212,6 @@ class RemoveField(Operation):
         print(
             f"  Skipping re-adding field '{self.field_name}' to model '{self.model_name}' in backwards migration (field details unknown)."
         )
-        pass
 
     def describe(self):
         return f"RemoveField(model_name='{self.model_name}', field_name='{self.field_name}')"
@@ -244,7 +239,6 @@ class AlterField(Operation):
         print(
             f"  Skipping reversion of field '{self.field_name}' on model '{self.model_name}' in backwards migration (old field details unknown)."
         )
-        pass
 
     def describe(self):
         return f"AlterField(model_name='{self.model_name}', field_name='{self.field_name}', field={self.field.describe()})"

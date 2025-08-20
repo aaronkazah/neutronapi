@@ -2,12 +2,9 @@ import os
 import tempfile
 import textwrap
 import shutil
-import unittest
 import datetime
-import logging
 from unittest import IsolatedAsyncioTestCase
 import os
-from neutronapi.db.connection import DatabaseType
 
 from neutronapi.db.migrations import (
     MigrationManager,
@@ -17,11 +14,9 @@ from neutronapi.db.migrations import (
     RemoveField,
     RenameField,
     RenameModel,
-    AlterField,
     DeleteModel,
 )
 from neutronapi.db.fields import CharField, IntegerField, DateTimeField, BooleanField
-from neutronapi.db.models import Model
 from neutronapi.db.connection import get_databases
 from neutronapi.tests.db.test_utils import table_exists, get_columns_dict
 
@@ -230,7 +225,7 @@ class TestComplexMigrations(IsolatedAsyncioTestCase):
         
         # Verify final state
         table_name = f"{self.app_label}_blog"
-        from neutronapi.tests.db.test_utils import get_columns_dict, table_exists
+        from neutronapi.tests.db.test_utils import get_columns_dict
         columns = await get_columns_dict(self.connection, self.provider, self.app_label, table_name)
         column_names = list(columns.keys())
         self.assertIn("headline", column_names)  # renamed from title

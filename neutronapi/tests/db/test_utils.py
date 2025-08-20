@@ -1,4 +1,3 @@
-import asyncio
 
 
 def _table_base_from_full(app_label: str, full_table_name: str) -> str:

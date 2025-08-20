@@ -2,15 +2,14 @@
 File-based migration tracking system with hash validation.
 """
 import hashlib
-import os
 import re
 import importlib.util
 import inspect
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Set
+from typing import List, Dict, Optional, Set
 
-from neutronapi.db.connection import get_databases, DatabaseType
+from neutronapi.db.connection import DatabaseType
 from neutronapi.db.migrations import Migration
 
 

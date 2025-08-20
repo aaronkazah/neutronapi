@@ -10,12 +10,10 @@ import json
 import re
 import os
 import fnmatch
-from typing import Dict, List, Any, Optional, Union
-from datetime import datetime
+from typing import Dict, List, Any, Optional
 import os
 
 from neutronapi.base import API
-from neutronapi.application import create_application
 from neutronapi.middleware.routing import RoutingMiddleware
 
 

@@ -2,10 +2,8 @@ import os
 import tempfile
 import textwrap
 import shutil
-import unittest
 import os
 import datetime
-import logging
 from unittest import IsolatedAsyncioTestCase
 
 from neutronapi.db.migrations import (
@@ -16,11 +14,8 @@ from neutronapi.db.migrations import (
     RemoveField,
     RenameField,
     RenameModel,
-    AlterField,
-    DeleteModel,
 )
 from neutronapi.db.fields import CharField, IntegerField, DateTimeField, BooleanField
-from neutronapi.db.models import Model
 from neutronapi.db.connection import get_databases, DatabaseType
 from neutronapi.tests.db.test_utils import table_exists, get_columns_dict
 

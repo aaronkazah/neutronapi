@@ -1,7 +1,6 @@
 """
 Tests for Application routing functionality
 """
-import asyncio
 from neutronapi.base import API
 from neutronapi.application import Application
 

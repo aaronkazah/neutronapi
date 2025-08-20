@@ -3,7 +3,6 @@ Comprehensive tests for the database layer.
 Tests models, migrations, fields, and database operations.
 """
 import unittest
-import asyncio
 import tempfile
 import os
 from datetime import datetime
@@ -67,7 +66,6 @@ class TestModelFunctionality(unittest.TestCase):
     
     def setUp(self):
         """No per-test DB wiring; default test DB is bootstrapped by manage.py."""
-        pass
     
     def test_model_creation(self):
         """Test creating a model instance."""

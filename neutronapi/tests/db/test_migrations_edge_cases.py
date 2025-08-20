@@ -2,9 +2,7 @@ import os
 import tempfile
 import textwrap
 import shutil
-import unittest
 import os
-from neutronapi.db.connection import DatabaseType
 import datetime
 import logging
 from unittest import IsolatedAsyncioTestCase
@@ -17,11 +15,8 @@ from neutronapi.db.migrations import (
     RemoveField,
     RenameField,
     RenameModel,
-    AlterField,
-    DeleteModel,
 )
 from neutronapi.db.fields import CharField, IntegerField, DateTimeField, BooleanField
-from neutronapi.db.models import Model
 from neutronapi.db.connection import get_databases
 from neutronapi.tests.db.test_utils import get_columns_dict, table_exists
 
@@ -459,7 +454,7 @@ class TestMigrationBackwardCompatibility(IsolatedAsyncioTestCase):
         table_name = f"{self.app_label}_test_model"
         
         # Verify table exists (provider-aware)
-        from neutronapi.tests.db.test_utils import table_exists, get_columns_dict
+        from neutronapi.tests.db.test_utils import table_exists
         self.assertTrue(await table_exists(self.connection, self.provider, self.app_label, table_name))
         
         # Backward: Delete model

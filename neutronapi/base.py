@@ -1,5 +1,4 @@
 # core/api.py
-import asyncio
 import json
 import re
 from dataclasses import dataclass
@@ -14,13 +13,10 @@ from typing import (
     TypeVar,
     Union,
     Type,
-    Protocol,
 )
 from urllib.parse import parse_qs
 
 from neutronapi import exceptions
-from neutronapi.middleware.cors import CORS
-from neutronapi.middleware.routing import RoutingMiddleware
 from neutronapi.encoders import CustomJSONEncoder
 from neutronapi.db.models import Model
 
@@ -35,6 +31,7 @@ RequestHandler = Callable[..., Any]
 Scope = Dict[str, Any]
 Receive = Callable[[], Any]
 Send = Callable[[Dict[str, Any]], None]
+
 
 class Response:
     """HTTP Response handler."""
@@ -133,7 +130,8 @@ class API:
     Request/Response Schema Architecture:
     - request_schema: JSON schema for request body validation (used for POST, PUT, PATCH)
     - response_schema: JSON schema for single item responses (GET /{id}, POST, PUT, PATCH)
-    - list_response_schema: JSON schema for list responses (GET /) - if not set, uses paginated response with response_schema items
+    - list_response_schema: JSON schema for list responses (GET /) - if not set, uses paginated response with
+      response_schema items
     - error_responses: Dict mapping HTTP status codes to error response schemas
 
     Schema Usage by HTTP Method:
@@ -250,6 +248,11 @@ class API:
         permission_classes: Optional[List[Any]] = None,
         throttle_classes: Optional[List[Any]] = None,
         name: Optional[str] = None,
+        # Endpoint middlewares (instances only)
+        middlewares: Optional[List[Any]] = None,
+        # Parsers list (instances only); default is JSONParser when None
+        parsers: Optional[List[Any]] = None,
+        # Endpoint middleware & parsers (instances only)
         # OpenAPI documentation parameters
         summary: Optional[str] = None,
         description: Optional[str] = None,
@@ -264,11 +267,15 @@ class API:
         # Body parsing control
         skip_body_parsing: bool = False,
     ) -> Callable:
-        """Decorator for defining API endpoints with optional OpenAPI documentation.
+        """Decorator for defining API endpoints.
 
         Args:
             path: URL path pattern (e.g., "/users/<int:id>")
             methods: HTTP methods (default: ["GET"])
+            middlewares: List of endpoint-level middleware instances (wraps handler; inside global
+                middlewares)
+            parsers: List of parser instances (JSONParser, FormParser, MultiPartParser, BinaryParser).
+                If not provided, defaults to JSON.
             permission_classes: List of permission classes
             throttle_classes: List of throttle classes
             name: Endpoint name for URL reversing
@@ -284,7 +291,7 @@ class API:
             deprecated: Whether this endpoint is deprecated
             include_in_docs: Whether to include this endpoint in generated documentation (default: True)
 
-        Example:
+        Examples:
             @API.endpoint(
                 "/users/<int:user_id>/profile",
                 methods=["GET", "PUT"],
@@ -314,6 +321,35 @@ class API:
             async def get_user_profile(self, scope, receive, send, user_id=None):
                 # Implementation here
                 pass
+
+            # JSON (default parser)
+            @API.endpoint("/users", methods=["POST"])
+            async def create_user(self, scope, receive, send, **kwargs):
+                data = kwargs["body"]  # dict parsed from JSON
+                return await self.response({"ok": True})
+
+            # Form
+            from neutronapi.parsers import FormParser
+            @API.endpoint("/login", methods=["POST"], parsers=[FormParser()])
+            async def login(self, scope, receive, send, **kwargs):
+                creds = kwargs["body"]  # dict from form urlencoded
+                return await self.response({"ok": True})
+
+            # Multipart
+            from neutronapi.parsers import MultiPartParser
+            @API.endpoint("/upload", methods=["POST"], parsers=[MultiPartParser()])
+            async def upload(self, scope, receive, send, **kwargs):
+                fields = kwargs["body"]
+                file_bytes = kwargs.get("file")
+                filename = kwargs.get("filename")
+                return await self.response({"ok": True})
+
+            # Binary
+            from neutronapi.parsers import BinaryParser
+            @API.endpoint("/blob", methods=["POST"], parsers=[BinaryParser()])
+            async def put_blob(self, scope, receive, send, **kwargs):
+                blob = kwargs["body"]  # bytes
+                return await self.response(b"stored", media_type="text/plain")
 
             # Example of hiding an endpoint from documentation:
             @API.endpoint(
@@ -361,6 +397,9 @@ class API:
                 # Body parsing control
                 skip_body_parsing=skip_body_parsing,
             )
+            # Attach extra endpoint metadata for middlewares/parsers
+            wrapper._endpoint_middlewares = middlewares or []
+            wrapper._endpoint_parsers = parsers or []
             return wrapper
 
         return decorator
@@ -637,90 +676,66 @@ class API:
                 }
             )
 
-            # Handle request body for POST/PUT/PATCH
+            # Parse request body using parser instances
+            from neutronapi.parsers import JSONParser
+            headers_dict = dict(scope.get("headers", []))
+            raw_body = b""
             if method in ["POST", "PUT", "PATCH"]:
-                headers = dict(scope.get("headers", []))
-                content_type = headers.get(b"content-type", b"").decode()
+                # Read complete body once
+                msg = await receive()
+                if msg.get("type") == "http.request":
+                    raw_body = msg.get("body", b"")
+                    more = msg.get("more_body", False)
+                    while more:
+                        msg = await receive()
+                        raw_body += msg.get("body", b"")
+                        more = msg.get("more_body", False)
 
-                # Read the entire body
-                raw_body = b""
-                message = await receive()
-                if message["type"] == "http.request":
-                    raw_body = message.get("body", b"")
-                    more_body = message.get("more_body", False)
+            # Endpoint-specific parsers
+            endpoint_parsers = []
+            if hasattr(handler, '_endpoint_parsers'):
+                endpoint_parsers = list(getattr(handler, '_endpoint_parsers') or [])
 
-                    while more_body:
-                        message = await receive()
-                        raw_body += message.get("body", b"")
-                        more_body = message.get("more_body", False)
-
-                # Store raw body in kwargs
-                kwargs["raw"] = raw_body
-
-                if content_type.startswith("multipart/form-data"):
+            parsed_kwargs = {}
+            if method in ["POST", "PUT", "PATCH"]:
+                # Select parser: first matching endpoint parser; else default JSONParser()
+                parser = None
+                for p in endpoint_parsers:
                     try:
-                        import cgi
-                        from io import BytesIO
+                        if hasattr(p, 'matches') and p.matches(headers_dict):
+                            parser = p
+                            break
+                    except Exception:
+                        continue
+                if parser is None:
+                    parser = JSONParser()
+                parsed_kwargs = await parser.parse(scope, receive, raw_body=raw_body, headers=headers_dict)
+                kwargs.update(parsed_kwargs)
 
-                        environ = {
-                            "REQUEST_METHOD": "POST",
-                            "CONTENT_TYPE": content_type,
-                            "CONTENT_LENGTH": str(len(raw_body)),
-                        }
+            # Compose endpoint-level middlewares (instances only)
+            endpoint_mws = []
+            if hasattr(handler, '_endpoint_middlewares'):
+                endpoint_mws = list(getattr(handler, '_endpoint_middlewares') or [])
 
-                        fp = BytesIO(raw_body)
-                        form = cgi.FieldStorage(
-                            fp=fp, environ=environ, keep_blank_values=True
-                        )
-
-                        data = {}
-                        for field in form.keys():
-                            if form[field].filename:
-                                kwargs["file"] = form[field].file.read()
-                                kwargs["filename"] = form[field].filename
-                                # Extract content type from file upload
-                                file_content_type = getattr(form[field], 'type', None)
-                                if file_content_type:
-                                    kwargs["file_content_type"] = file_content_type
-                            else:
-                                data[field] = form[field].value
-
-                        kwargs["body"] = data
-                    except Exception as e:
-                        raise exceptions.ValidationError(
-                            f"Invalid multipart form data: {str(e)}"
-                        )
-
-                elif content_type == "application/x-www-form-urlencoded":
-                    try:
-                        from urllib.parse import parse_qs
-
-                        data = parse_qs(raw_body.decode())
-                        kwargs["body"] = {
-                            k: v[0] if len(v) == 1 else v for k, v in data.items()
-                        }
-                    except Exception as e:
-                        raise exceptions.ValidationError(f"Invalid form data: {str(e)}")
-
+            async def handler_app(scope2, receive2, send2):
+                response = await handler(scope2, receive2, send2, **kwargs)
+                if response is None:
+                    return
+                elif isinstance(response, Response):
+                    return await response(scope2, receive2, send2)
                 else:
-                    if skip_body_parsing:
-                        # Skip JSON parsing for binary data - provide raw body
-                        kwargs["body"] = raw_body
-                    else:
-                        try:
-                            kwargs["body"] = json.loads(raw_body) if raw_body else {}
-                        except json.JSONDecodeError:
-                            raise exceptions.ValidationError("Invalid JSON body")
+                    raise ValueError(f"Invalid response type: {type(response)}")
 
-            response = await handler(scope, receive, send, **kwargs)
+            app_to_call = handler_app
+            for mw in reversed(endpoint_mws):
+                if hasattr(mw, 'app'):
+                    mw.app = app_to_call
+                if hasattr(mw, 'router'):
+                    mw.router = app_to_call
+                app_to_call = mw
 
-            if response is None:
-                # Handler has sent the response manually, nothing more to do
-                return
-            elif isinstance(response, Response):
-                return await response(scope, receive, send)
-            else:
-                raise ValueError(f"Invalid response type: {type(response)}")
+            # Call the composed endpoint app
+            await app_to_call(scope, receive, send)
 
         except exceptions.APIException as e:
             # Unified API error shape

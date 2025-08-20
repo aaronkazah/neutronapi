@@ -6,7 +6,6 @@ except Exception:  # pragma: no cover
 import os
 import re
 from typing import Optional, Dict, List, Any, Union
-from .providers import BaseProvider
 
 
 class Q:

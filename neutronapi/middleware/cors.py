@@ -5,7 +5,7 @@ from typing import Callable, List, Dict, Tuple
 class CORS:
     def __init__(
         self,
-        router: Callable,
+        router: Callable | None = None,
         allowed_origins: List[str] = None,
         allow_all_origins: bool = False,
     ):

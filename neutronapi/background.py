@@ -1,9 +1,8 @@
 import asyncio
 import logging
 import uuid
-import sys
 from datetime import datetime, timedelta
-from typing import Dict, Any, Callable, Awaitable, Optional, List, Union
+from typing import Dict, Any, Callable, Awaitable, Optional, List
 from dataclasses import dataclass, field
 from enum import Enum
 import traceback
@@ -12,7 +11,7 @@ import traceback
 __all__ = [
     'Background',
     'Task',
-    'TaskFrequency', 
+    'TaskFrequency',
     'TaskPriority',
     'TaskConfig',
     'TaskResult',
@@ -36,12 +35,12 @@ class TaskPriority(Enum):
 
 class Task:
     """Base class for background tasks - similar to API pattern."""
-    
+
     name: str = ""
     frequency: TaskFrequency = TaskFrequency.ONCE
     priority: TaskPriority = TaskPriority.NORMAL
     interval: Optional[int] = None  # Custom interval in seconds
-    
+
     async def run(self, **kwargs) -> Any:
         """Override this method to define your task logic."""
         raise NotImplementedError("Subclasses must implement the run method")
@@ -313,7 +312,10 @@ class Background:
                     self.logger.info(due_msg)
 
                     for task in due_tasks:
-                        task_msg = f"Executing task: {task.name}, last_run: {task.last_run}, frequency: {task.frequency}"
+                        task_msg = f"Executing task: {
+                            task.name}, last_run: {
+                            task.last_run}, frequency: {
+                            task.frequency}"
                         self.logger.info(task_msg)
 
                     # Sort by priority
@@ -333,7 +335,6 @@ class Background:
 
         except asyncio.CancelledError:
             self.logger.info("Scheduler loop cancelled")
-            pass
         finally:
 
             # Cancel queue processors

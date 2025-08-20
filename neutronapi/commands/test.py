@@ -63,7 +63,6 @@ class Command:
         import os
         import shutil
         import subprocess
-        import time
 
         self._pg_container = None
         host = os.getenv('PGHOST', '127.0.0.1')
@@ -88,18 +87,18 @@ class Command:
             # Check if a container with our name exists; if not, run one
             name = 'neutronapi_test_pg'
             ps = subprocess.run([docker, 'ps', '-q', '-f', f'name={name}'], capture_output=True, text=True)
-            
+
             if not ps.stdout.strip():
                 print(f'Starting PostgreSQL container on port {port}...')
                 run = subprocess.run([
                     docker, 'run', '-d', '--rm', '--name', name,
                     '-e', f'POSTGRES_PASSWORD={password}',
-                    '-e', f'POSTGRES_DB={dbname}', 
+                    '-e', f'POSTGRES_DB={dbname}',
                     '-e', f'POSTGRES_USER={user}',
                     '-p', f'{port}:5432',
                     'postgres:15-alpine'
                 ], capture_output=True, text=True)
-                
+
                 if run.returncode == 0:
                     self._pg_container = name
                     print(f'PostgreSQL container started: {name}')
@@ -117,24 +116,28 @@ class Command:
         # Wait for PostgreSQL to be ready
         print('Waiting for PostgreSQL to be ready...')
         try:
-            import asyncio, asyncpg
+            import asyncio
+            import asyncpg
+
             async def _wait_ready():
                 for i in range(60):  # Wait up to 15 seconds
                     try:
-                        conn = await asyncpg.connect(host=host, port=port, database=dbname, user=user, password=password)
+                        conn = await asyncpg.connect(
+                            host=host, port=port, database=dbname, user=user, password=password
+                        )
                         await conn.close()
                         return True
                     except Exception:
                         if i % 4 == 0:  # Print every second
-                            print(f'  Waiting for PostgreSQL... ({i//4 + 1}s)')
+                            print(f'  Waiting for PostgreSQL... ({i // 4 + 1}s)')
                         await asyncio.sleep(0.25)
                 return False
-            
+
             ready = asyncio.run(_wait_ready())
             if not ready:
                 print('PostgreSQL failed to become ready in time')
                 return False
-                
+
         except Exception as e:
             print(f"Error waiting for PostgreSQL: {e}")
             return False
@@ -147,7 +150,7 @@ class Command:
             os.environ['PGDATABASE'] = dbname
             os.environ['PGUSER'] = user
             os.environ['PGPASSWORD'] = password
-            
+
             # Force database system to use the new config
             from neutronapi.db import setup_databases
             test_config = {
@@ -161,17 +164,18 @@ class Command:
                 }
             }
             setup_databases(test_config)
-            
+
             print(f'✓ PostgreSQL ready at {host}:{port}/{dbname}')
             return True
-            
+
         except Exception as e:
             print(f"Error configuring PostgreSQL: {e}")
             return False
 
     def _teardown_postgres(self):
         # Stop the disposable postgres container if we started it
-        import shutil, subprocess
+        import shutil
+        import subprocess
         if getattr(self, '_pg_container', None):
             docker = shutil.which('docker')
             if docker:
@@ -183,27 +187,27 @@ class Command:
     def handle(self, args: List[str]) -> None:
         """
         Run database tests with Django-like dot notation support.
-        
+
         Usage:
             python manage.py test                    # Run all tests
-            python manage.py test core.tests        # Run specific module tests  
+            python manage.py test core.tests        # Run specific module tests
             python manage.py test core.tests.db.test_db.TestModel.test_creation  # Specific test
             python manage.py test --help            # Show help
-        
+
         Examples:
             python manage.py test
             python manage.py test core.tests.db.test_db
             python manage.py test core.tests.db.test_db.TestModel.test_creation
         """
-        
+
         # Show help if requested
         if args and args[0] in ["--help", "-h", "help"]:
             print(f"{self.help}\n")
             print(self.handle.__doc__)
             return
-        
+
         # No project-specific env flags; keep behavior generic
-        
+
         # Bootstrap test databases
         provider_env = os.getenv('DATABASE_PROVIDER', '').lower().strip()
         if provider_env in ('asyncpg', 'postgres', 'postgresql'):
@@ -215,7 +219,7 @@ class Command:
         else:
             print('Bootstrapping SQLite in-memory test database...')
             self._bootstrap_sqlite()
-        
+
         print("Running tests...")
 
         exit_code = 0
@@ -256,7 +260,6 @@ class Command:
                 return arg.replace(os.sep, ".")
 
             def add_target(target: str):
-                nonlocal suite
                 # If target is an app label (directory in apps/ or 'core')
                 if os.path.isdir(os.path.join("apps", target, "tests")):
                     discovered = loader.discover(os.path.join("apps", target, "tests"), pattern="test_*.py")

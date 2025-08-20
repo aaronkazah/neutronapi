@@ -8,7 +8,6 @@ from .connection import (
     DatabaseType,
 )
 from .models import Model
-from .fields import *
 from .queryset import QuerySet
 
 

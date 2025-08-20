@@ -1,4 +1,3 @@
-import asyncio
 import unittest
 
 from neutronapi.base import API

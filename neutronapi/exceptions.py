@@ -45,7 +45,8 @@ class NotFound(APIException):
         if message is None:
             message = (
                 "Unrecognized request URL. If you are trying to list objects, remove the trailing slash. "
-                "If you are trying to retrieve an object, make sure you passed a valid (non-empty) identifier in your code. "
+                "If you are trying to retrieve an object, make sure you passed a valid (non-empty) identifier in your "
+                "code. "
                 "Please see https://layerbrain.com/docs."
             )
         super().__init__(message, type="invalid_request_error")
@@ -94,4 +95,3 @@ class Throttled(APIException):
 
 class DoesNotExist(Exception):
     """Raised when an object does not exist."""
-    pass
