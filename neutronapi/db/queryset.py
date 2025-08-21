@@ -421,10 +421,9 @@ class QuerySet:
             qs._select_fields = ["DISTINCT *"]
         return qs
 
-    async def all(self) -> List[Union['Object', Dict, Any]]:
-        if self._result_cache is None:
-            self._result_cache = await self._fetch_all()
-        return self._result_cache
+    def all(self):
+        """Return the queryset itself (unevaluated), Django-style."""
+        return self._clone()
 
     async def _fetch_all(self) -> List[Union['Object', Dict, Any]]:
         # Ensure provider/dialect is initialized before constructing SQL
@@ -521,12 +520,14 @@ class QuerySet:
     def __await__(self):
         async def _populate_and_return_self():
             if self._result_cache is None:
-                self._result_cache = await self.all()
+                self._result_cache = await self._fetch_all()
             return self
         return _populate_and_return_self().__await__()
 
     async def __aiter__(self):
-        results = await self.all()
+        if self._result_cache is None:
+            self._result_cache = await self._fetch_all()
+        results = self._result_cache
         for item in results:
             yield item
 

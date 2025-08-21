@@ -66,10 +66,12 @@ class TestModels(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(hasattr(TestUser.objects, 'get'))
 
     async def test_model_objects_all_method_works(self):
-        """Test that Model.objects.all() returns a list."""
-        # This should not raise AttributeError: '_Manager' object has no attribute 'all'
-        result = await TestUser.objects.all()
-        # Result should be a list (empty initially)
+        """Test that Model.objects.all() returns a QuerySet and can materialize to a list."""
+        qs = await TestUser.objects.all()
+        # all() awaited returns a QuerySet with methods
+        self.assertTrue(hasattr(qs, 'delete'))
+        # Materialize by iterating (cache populated by await)
+        result = list(qs)
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 0)
 
@@ -87,8 +89,9 @@ class TestModels(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(hasattr(result, 'first'))
         self.assertTrue(hasattr(result, 'count'))
         
-        # Should be able to call these methods
-        all_results = await result.all()
+        # Should be able to materialize to a list
+        awaited = await result
+        all_results = list(awaited)
         self.assertIsInstance(all_results, list)
         
         count = await result.count()
@@ -113,7 +116,8 @@ class TestModels(unittest.IsolatedAsyncioTestCase):
         )
         
         # READ: Test that we can fetch the user
-        all_users = await TestUser.objects.all()
+        qs_all = await TestUser.objects.all()
+        all_users = list(qs_all)
         self.assertEqual(len(all_users), 1)
         
         user = all_users[0]
@@ -122,7 +126,8 @@ class TestModels(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(user.email, 'test@example.com')
         
         # Test filter
-        filtered_users = await TestUser.objects.filter(name='Test User').all()
+        qs_filt = await TestUser.objects.filter(name='Test User')
+        filtered_users = list(qs_filt)
         self.assertEqual(len(filtered_users), 1)
         self.assertEqual(filtered_users[0].email, 'test@example.com')
         

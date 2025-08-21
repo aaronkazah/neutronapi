@@ -85,11 +85,13 @@ class TestQuerySetSQLite(unittest.IsolatedAsyncioTestCase):
 
         # Filter by folder
         folder = '/org-1/files'
-        results = await TestObject.objects.filter(folder=folder).all()
+        qs_folder = await TestObject.objects.filter(folder=folder)
+        results = list(qs_folder)
         self.assertEqual(len(results), 2)
 
         # Test basic filtering
-        alpha_results = await TestObject.objects.filter(name='A').all()
+        qs_alpha = await TestObject.objects.filter(name='A')
+        alpha_results = list(qs_alpha)
         self.assertEqual(len(alpha_results), 1)
         self.assertEqual(alpha_results[0].name, 'A')
 

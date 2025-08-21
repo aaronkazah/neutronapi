@@ -73,15 +73,18 @@ class TestQuerySetMoreSQLite(unittest.IsolatedAsyncioTestCase):
         os.unlink(self.temp_db.name)
 
     async def test_values_and_exclude(self):
-        names = await TestObject.objects.values_list('name', flat=True).all()
+        names_qs = await TestObject.objects.values_list('name', flat=True)
+        names = list(names_qs)
         self.assertIn('A', names)
         self.assertIn('C', names)
 
-        excl = await TestObject.objects.exclude(name='A').values_list('name', flat=True).all()
+        excl_qs = await TestObject.objects.exclude(name='A').values_list('name', flat=True)
+        excl = list(excl_qs)
         self.assertNotIn('A', excl)
 
     async def test_distinct_and_last(self):
-        distinct_names = await TestObject.objects.values_list('name', flat=True).distinct('name').all()
+        distinct_qs = await TestObject.objects.values_list('name', flat=True).distinct('name')
+        distinct_names = list(distinct_qs)
         # Both A and C should be present without duplicates
         self.assertCountEqual(distinct_names, ['A', 'C'])
 
@@ -91,8 +94,10 @@ class TestQuerySetMoreSQLite(unittest.IsolatedAsyncioTestCase):
         self.assertIn(last_obj.name, ['A', 'C'])
 
     async def test_json_lookups(self):
-        high = await TestObject.objects.filter(meta__score__gt=5).values_list('name', flat=True).all()
+        high_qs = await TestObject.objects.filter(meta__score__gt=5).values_list('name', flat=True)
+        high = list(high_qs)
         self.assertEqual(high, ['C'])
 
-        alpha = await TestObject.objects.filter(meta__tag__contains='alp').values_list('name', flat=True).all()
+        alpha_qs = await TestObject.objects.filter(meta__tag__contains='alp').values_list('name', flat=True)
+        alpha = list(alpha_qs)
         self.assertCountEqual(alpha, ['C', 'A'])
