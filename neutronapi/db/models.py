@@ -132,19 +132,19 @@ class Model(metaclass=ModelBase):
             return name
         return f'"{name}"'
 
-    async def save(self, create: bool = True, using: Optional[str] = None):
+    async def save(self, create: Optional[bool] = None, using: Optional[str] = None):
         """Persist the model instance to the database.
 
+        - Default behavior: If ``create`` is None, INSERT when primary key is missing,
+          otherwise UPDATE the existing row by primary key. This ensures that calling
+          ``instance.save()`` on a loaded object does not create duplicates.
         - On insert (create=True), if there is exactly one primary key field and its
           value is missing/None, a value may be auto-generated:
             - When the PK field is a CharField (the default), a time-sortable ID
-              is generated (ULID by default; UUIDv7 if available) and set on the
-              instance prior to INSERT. This yields better index locality across
-              SQLite and PostgreSQL.
-            - If the user declared a custom primary key, its value is not generated
-              automatically; the user is expected to supply it or configure a DB-side
-              default.
-        - On update (create=False), all fields are written as-is.
+              is generated (ULID by default; UUIDv7 if available) and set prior to INSERT.
+            - If a custom PK is declared, it is respected and not auto-generated.
+        - On update (create=False), only non-PK fields are updated via a single UPDATE
+          statement with a WHERE on the primary key.
         """
         alias = using or 'default'
         db = await get_databases().get_connection(alias)
@@ -152,26 +152,73 @@ class Model(metaclass=ModelBase):
         schema, table = self._get_parsed_table_name()
         table_ident = f"{self._quote(schema)}.{self._quote(table)}" if is_pg else self._quote(f"{schema}_{table}")
 
-        # Auto-generate a primary key value if appropriate (single PK, missing value).
-        try:
-            pk_fields = [name for name, f in self._fields.items() if getattr(f, 'primary_key', False)]
-            if len(pk_fields) == 1:
-                pk_name = pk_fields[0]
-                pk_field = self._fields[pk_name]
-                if getattr(self, pk_name, None) in (None, ""):
-                    from .fields import CharField  # localized import to avoid cycles
-                    if isinstance(pk_field, CharField):
-                        from ..utils.ids import generate_time_sortable_id
-                        setattr(self, pk_name, generate_time_sortable_id())
-                    # For non-CharField PKs, defer to user-configured DB defaults.
-        except Exception:
-            # Never allow PK generation logic to crash save(); fall through to normal flow.
-            pass
+        # Determine primary key
+        pk_fields = [name for name, f in self._fields.items() if getattr(f, 'primary_key', False)]
+        pk_name = pk_fields[0] if len(pk_fields) == 1 else None
 
-        # Prepare columns/values
-        cols = []
-        vals = []
+        # Decide insert vs update if not explicitly set
+        if create is None:
+            create = True
+            if pk_name is not None and getattr(self, pk_name, None):
+                create = False
+
+        if create:
+            # Auto-generate a primary key value if appropriate (single PK, missing value).
+            try:
+                if pk_name is not None:
+                    pk_field = self._fields[pk_name]
+                    if getattr(self, pk_name, None) in (None, ""):
+                        from .fields import CharField  # localized import to avoid cycles
+                        if isinstance(pk_field, CharField):
+                            from ..utils.ids import generate_time_sortable_id
+                            setattr(self, pk_name, generate_time_sortable_id())
+                        # For non-CharField PKs, defer to user-configured DB defaults.
+            except Exception:
+                # Never allow PK generation logic to crash save(); fall through to normal flow.
+                pass
+
+        if create:
+            # Prepare columns/values for INSERT
+            cols = []
+            vals = []
+            for fname, field in self._fields.items():
+                db_col = getattr(field, 'db_column', None) or fname
+                val = getattr(self, fname, None)
+                if val is None and getattr(field, 'default', None) is not None:
+                    val = field.default() if callable(field.default) else field.default
+                if isinstance(val, datetime.datetime) and not is_pg:
+                    val = val.isoformat()
+                # Serialize JSON fields
+                if hasattr(field, '__class__') and 'JSONField' in field.__class__.__name__:
+                    if isinstance(val, (dict, list)):
+                        import json
+                        val = json.dumps(val)
+                cols.append(self._quote(db_col))
+                vals.append(val)
+
+            if is_pg:
+                placeholders = ', '.join([f"${i+1}" for i in range(len(vals))])
+            else:
+                placeholders = ', '.join(['?'] * len(vals))
+
+            sql = f"INSERT INTO {table_ident} ({', '.join(cols)}) VALUES ({placeholders})"
+            await db.execute(sql, vals if is_pg else tuple(vals))
+            await db.commit()
+            return
+
+        # UPDATE path (create is False)
+        if not pk_name:
+            raise ValueError("Cannot update without a single primary key field.")
+        pk_value = getattr(self, pk_name, None)
+        if pk_value in (None, ""):
+            raise ValueError("Cannot update without a primary key value.")
+
+        set_cols = []
+        params = []
+        index = 1
         for fname, field in self._fields.items():
+            if fname == pk_name:
+                continue  # don't update the primary key
             db_col = getattr(field, 'db_column', None) or fname
             val = getattr(self, fname, None)
             if val is None and getattr(field, 'default', None) is not None:
@@ -183,16 +230,20 @@ class Model(metaclass=ModelBase):
                 if isinstance(val, (dict, list)):
                     import json
                     val = json.dumps(val)
-            cols.append(self._quote(db_col))
-            vals.append(val)
+            placeholder = f"${index}" if is_pg else "?"
+            set_cols.append(f"{self._quote(db_col)} = {placeholder}")
+            params.append(val)
+            index += 1
 
+        # WHERE by primary key
         if is_pg:
-            placeholders = ', '.join([f"${i+1}" for i in range(len(vals))])
+            where_placeholder = f"${index}"
         else:
-            placeholders = ', '.join(['?'] * len(vals))
+            where_placeholder = "?"
+        params.append(pk_value)
 
-        sql = f"INSERT INTO {table_ident} ({', '.join(cols)}) VALUES ({placeholders})"
-        await db.execute(sql, vals if is_pg else tuple(vals))
+        sql = f"UPDATE {table_ident} SET {', '.join(set_cols)} WHERE {self._quote(pk_name)} = {where_placeholder}"
+        await db.execute(sql, params if is_pg else tuple(params))
         await db.commit()
 
     @classproperty
