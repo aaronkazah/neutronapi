@@ -1,17 +1,31 @@
 """Unified API exceptions with consistent error payloads."""
 
+from typing import Dict, Any, Optional, Union
+
 
 class APIException(Exception):
     """Base API exception."""
     status_code = 500
 
-    def __init__(self, message: str, type: str | None = None, status: int | None = None):
+    def __init__(self, message: str, type: Optional[str] = None, status: Optional[int] = None) -> None:
+        """Initialize API exception.
+        
+        Args:
+            message: Error message
+            type: Error type identifier
+            status: HTTP status code override
+        """
         self.message = message
         self.type = type or "error"
         self.status_code = status or self.status_code
         super().__init__(self.message)
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, Dict[str, str]]:
+        """Convert exception to dict for JSON serialization.
+        
+        Returns:
+            Dict with error details
+        """
         return {
             "error": {
                 "type": self.type,
@@ -24,11 +38,22 @@ class ValidationError(APIException):
     """Raised when validation fails."""
     status_code = 400
 
-    def __init__(self, message: str = "Validation error", error_type: str | None = None):
+    def __init__(self, message: str = "Validation error", error_type: Optional[str] = None) -> None:
+        """Initialize validation error.
+        
+        Args:
+            message: Validation error message
+            error_type: Specific validation error type
+        """
         self.error_type = error_type or "validation_error"
         super().__init__(message)
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, Dict[str, str]]:
+        """Convert validation error to dict.
+        
+        Returns:
+            Dict with validation error details
+        """
         return {
             "error": {
                 "type": self.error_type,
@@ -41,7 +66,12 @@ class NotFound(APIException):
     """Raised when a resource is not found."""
     status_code = 404
 
-    def __init__(self, message: str | None = None):
+    def __init__(self, message: Optional[str] = None) -> None:
+        """Initialize not found error.
+        
+        Args:
+            message: Custom error message, uses default if None
+        """
         if message is None:
             message = (
                 "Unrecognized request URL. If you are trying to list objects, remove the trailing slash. "
@@ -56,7 +86,8 @@ class PermissionDenied(APIException):
     """Raised when permission is denied."""
     status_code = 403
 
-    def __init__(self, message: str = "Permission denied"):
+    def __init__(self, message: str = "Permission denied") -> None:
+        """Initialize permission denied error."""
         super().__init__(message, type="permission_denied")
 
 
@@ -64,7 +95,8 @@ class AuthenticationFailed(APIException):
     """Raised when authentication fails."""
     status_code = 401
 
-    def __init__(self, message: str = "Authentication failed"):
+    def __init__(self, message: str = "Authentication failed") -> None:
+        """Initialize authentication failed error."""
         super().__init__(message, type="authentication_failed")
 
 
@@ -72,7 +104,13 @@ class MethodNotAllowed(APIException):
     """Method not allowed exception."""
     status_code = 405
 
-    def __init__(self, method: str = "", path: str = ""):
+    def __init__(self, method: str = "", path: str = "") -> None:
+        """Initialize method not allowed error.
+        
+        Args:
+            method: HTTP method that was attempted
+            path: Request path
+        """
         # If method looks like a full message, use it directly
         if method and ("not allowed" in method.lower() or "method" in method.lower()):
             message = method
@@ -85,7 +123,13 @@ class Throttled(APIException):
     """Request throttled exception."""
     status_code = 429
 
-    def __init__(self, message: str = "Request throttled", wait: int | None = None):
+    def __init__(self, message: str = "Request throttled", wait: Optional[int] = None) -> None:
+        """Initialize throttled error.
+        
+        Args:
+            message: Throttling message
+            wait: Seconds to wait before retrying
+        """
         self.wait = wait
         super().__init__(message, type="throttled", status=429)
 

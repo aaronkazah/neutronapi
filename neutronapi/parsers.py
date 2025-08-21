@@ -1,23 +1,63 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 
 class BaseParser:
+    """Base parser class for handling different content types."""
+    
     media_types: List[str] = []
 
     def matches(self, headers: Dict[bytes, bytes]) -> bool:
+        """Check if this parser can handle the given content type.
+        
+        Args:
+            headers: Request headers
+            
+        Returns:
+            True if parser can handle the content type
+        """
         ctype = (headers.get(b"content-type") or b"").split(b";", 1)[0].strip().lower()
         return any(ctype == mt.encode() for mt in self.media_types)
 
-    async def parse(self, scope, receive, *, raw_body: bytes, headers: Dict[bytes, bytes]) -> Dict:
+    async def parse(self, scope: Dict[str, Any], receive: Any, *, raw_body: bytes, headers: Dict[bytes, bytes]) -> Dict[str, Any]:
+        """Parse request body.
+        
+        Args:
+            scope: ASGI scope
+            receive: ASGI receive callable
+            raw_body: Raw request body bytes
+            headers: Request headers
+            
+        Returns:
+            Parsed data dictionary
+            
+        Raises:
+            NotImplementedError: Must be implemented by subclasses
+        """
         raise NotImplementedError
 
 
 class JSONParser(BaseParser):
+    """Parser for application/json content type."""
+    
     media_types = ["application/json"]
 
-    async def parse(self, scope, receive, *, raw_body: bytes, headers: Dict[bytes, bytes]) -> Dict:
+    async def parse(self, scope: Dict[str, Any], receive: Any, *, raw_body: bytes, headers: Dict[bytes, bytes]) -> Dict[str, Any]:
+        """Parse JSON request body.
+        
+        Args:
+            scope: ASGI scope
+            receive: ASGI receive callable
+            raw_body: Raw request body bytes
+            headers: Request headers
+            
+        Returns:
+            Dict with 'body' key containing parsed JSON data
+            
+        Raises:
+            ValidationError: If JSON is malformed
+        """
         import json
         try:
             data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
@@ -87,7 +127,20 @@ class MultiPartParser(BaseParser):
 
 
 class BinaryParser(BaseParser):
+    """Parser for binary data (application/octet-stream)."""
+    
     media_types = ["application/octet-stream"]
 
-    async def parse(self, scope, receive, *, raw_body: bytes, headers: Dict[bytes, bytes]) -> Dict:
+    async def parse(self, scope: Dict[str, Any], receive: Any, *, raw_body: bytes, headers: Dict[bytes, bytes]) -> Dict[str, Any]:
+        """Parse binary data.
+        
+        Args:
+            scope: ASGI scope
+            receive: ASGI receive callable
+            raw_body: Raw request body bytes
+            headers: Request headers
+            
+        Returns:
+            Dict with 'body' key containing raw bytes
+        """
         return {"body": raw_body or b""}

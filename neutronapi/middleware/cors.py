@@ -1,14 +1,14 @@
 # core/api/middleware/cors.py
-from typing import Callable, List, Dict, Tuple
+from typing import Callable, List, Dict, Tuple, Optional, Any
 
 
 class CORS:
     def __init__(
         self,
-        router: Callable | None = None,
-        allowed_origins: List[str] = None,
+        router: Optional[Callable] = None,
+        allowed_origins: Optional[List[str]] = None,
         allow_all_origins: bool = False,
-    ):
+    ) -> None:
         self.router = router
         self.allowed_origins = allowed_origins
         self.allow_all_origins = allow_all_origins
@@ -18,7 +18,7 @@ class CORS:
                 "Either 'allow_all_origins' must be True or 'allowed_origins' must be provided."
             )
 
-    async def __call__(self, scope: Dict, receive: Callable, send: Callable, **kwargs):
+    async def __call__(self, scope: Dict[str, Any], receive: Callable, send: Callable, **kwargs: Any) -> None:
         if scope["type"] != "http":
             await self.router(scope, receive, send, **kwargs)
             return

@@ -80,7 +80,8 @@ class TaskResult:
 class Background:
     """Manages periodic task execution and async task queues."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Initialize background task scheduler."""
         self.tasks: Dict[str, TaskConfig] = {}
         self.running = False
         self._task: Optional[asyncio.Task] = None
@@ -181,7 +182,11 @@ class Background:
         return self._results.get(task_id)
 
     def remove_task(self, task_id: str) -> None:
-        """Remove a task from the scheduler."""
+        """Remove a task from the scheduler.
+        
+        Args:
+            task_id: ID of the task to remove
+        """
         if task_id in self.tasks:
             task_name = self.tasks[task_id].name
             del self.tasks[task_id]

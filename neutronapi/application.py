@@ -1,5 +1,13 @@
-from typing import Dict, Optional, Callable, List, Any, Union
+from typing import Dict, Optional, Callable, List, Any, Union, Protocol, TypeVar, Generic, TYPE_CHECKING
 import warnings
+import re
+
+if TYPE_CHECKING:
+    from neutronapi.base import API
+
+
+T = TypeVar('T')
+RegistryValue = TypeVar('RegistryValue')
 
 from neutronapi.base import API, Response
 from neutronapi import exceptions
@@ -44,7 +52,7 @@ class Application:
                 CompressionMiddleware(minimum_size=512),
             ],
             services=[
-                # Example: EventBus(id="event_bus"), EmailService(id="email")
+                # Example: 'services:event_bus': EventBus(), 'services:email': EmailService()
             ],
         )
     """
@@ -54,7 +62,7 @@ class Application:
         apis: Optional[Union[Dict[str, API], List[API]]] = None,
         *,
         middlewares: Optional[List[Any]] = None,
-        services: Optional[Union[List[Any], Dict[str, Any]]] = None,
+        registry: Optional[Dict[str, Any]] = None,
         tasks: Optional[Dict[str, Any]] = None,
         version: str = "1.0.0",
         allowed_hosts: Optional[List[str]] = None,
@@ -63,12 +71,15 @@ class Application:
         cors_allow_all: bool = True,
     ) -> None:
         """
-        Create a new ASGI application.
+        Create a new ASGI application with dependency injection support.
 
         Args:
-            apis: List of API instances. Each API must have a 'resource' attribute
+            apis: List or dict of API instances. Each API must have a 'resource' attribute
                   that defines its base path (e.g., "/v1/users"). APIs are registered
                   in the order they appear in the list.
+            middlewares: List of middleware instances to apply to requests
+            registry: Dict of items for universal dependency injection. Keys must
+                     follow 'namespace:name' format (e.g., 'utils:logger', 'services:email')
             tasks: Optional background tasks configuration
             version: Application version string
             allowed_hosts: List of allowed host names for security
@@ -77,13 +88,25 @@ class Application:
             cors_allow_all: Whether to allow all CORS origins (default: True)
 
         Example:
-            app = Application(apis=[
-                UsersAPI(),      # resource = "/v1/users"
-                ProductsAPI(),   # resource = "/v1/products"
-            ])
+            >>> app = Application(
+            ...     apis=[
+            ...         UsersAPI(),      # resource = "/v1/users"
+            ...         ProductsAPI(),   # resource = "/v1/products"
+            ...     ],
+            ...     registry={
+            ...         'utils:logger': Logger(),
+            ...         'utils:cache': RedisCache(),
+            ...         'services:email': EmailService(),
+            ...     },
+            ... )
+            >>> 
+            >>> # In your API methods:
+            >>> logger = self.registry.get('utils:logger')
+            >>> email = self.registry.get('services:email')
         """
         # Convert provided APIs (list or dict) into internal {resource: api} mapping
-        self.apis: Dict[str, API] = {}
+        from neutronapi.base import API
+        self.apis: Dict[str, 'API'] = {}
         if apis:
             # Support both list[API] and dict[str, API]
             api_iterable = apis.values() if isinstance(apis, dict) else apis
@@ -97,31 +120,20 @@ class Application:
 
         self.version = version
 
-        # Normalize services (input: list or dict of instances) → dict keyed by id
-        self.services: Dict[str, Any] = {}
-        if services:
-            if isinstance(services, dict):
-                self.services = dict(services)
-            else:
-                for svc in services:
-                    sid = getattr(svc, 'id', None)
-                    if not sid:
-                        raise ValueError("Service instances must have an 'id' attribute")
-                    if sid in self.services:
-                        raise ValueError(f"Duplicate service id: {sid}")
-                    self.services[sid] = svc
-            # Propagate container to each service instance
-            for svc in self.services.values():
-                if hasattr(svc, 'set_services') and callable(getattr(svc, 'set_services')):
-                    svc.set_services(self.services)
-                else:
-                    try:
-                        setattr(svc, 'services', self.services)
-                    except Exception:
-                        pass
-        # Assign services to APIs
+        # Initialize registry for universal dependency injection
+        self.registry: Dict[str, Any] = {}
+        
+        # Handle registry parameter - validate namespace:name format
+        if registry:
+            for key, value in registry.items():
+                self._validate_registry_key(key)
+                if key in self.registry:
+                    raise ValueError(f"Duplicate registry key: '{key}'")
+                self.registry[key] = value
+        
+        # Assign registry to APIs
         for api in self.apis.values():
-            setattr(api, 'services', self.services)
+            setattr(api, 'registry', self.registry)
 
         # Simple handler that routes to APIs
         async def app(scope, receive, send):
@@ -162,12 +174,12 @@ class Application:
                     mw.app = composed
                 if hasattr(mw, 'router'):
                     mw.router = composed
-                # Provide shared services if middleware wants it
-                if hasattr(mw, 'set_services') and callable(getattr(mw, 'set_services')):
-                    mw.set_services(self.services)
-                elif hasattr(mw, 'services'):
+                # Provide shared registry if middleware wants it
+                if hasattr(mw, 'set_registry') and callable(getattr(mw, 'set_registry')):
+                    mw.set_registry(self.registry)
+                elif hasattr(mw, 'registry'):
                     try:
-                        setattr(mw, 'services', self.services)
+                        setattr(mw, 'registry', self.registry)
                     except Exception:
                         pass
                 composed = mw
@@ -203,6 +215,119 @@ class Application:
 
             self.app.on_startup.append(_start_background)
             self.app.on_shutdown.append(_stop_background)
+
+    def _validate_registry_key(self, key: str) -> None:
+        """Validate registry key follows namespace:name format.
+        
+        Args:
+            key: Registry key to validate
+            
+        Raises:
+            ValueError: If key format is invalid
+            
+        Example:
+            Valid: 'services:email', 'utils:logger', 'modules:auth'
+            Invalid: 'email', 'services:', ':logger', 'utils:my-logger'
+        """
+        if not isinstance(key, str):
+            raise ValueError(f"Registry key must be string, got {type(key).__name__}")
+        
+        if ':' not in key:
+            raise ValueError(
+                f"Registry key '{key}' must follow 'namespace:name' format. "
+                f"Example: 'services:email', 'utils:logger'"
+            )
+        
+        namespace, name = key.split(':', 1)
+        if not namespace or not name:
+            raise ValueError(
+                f"Registry key '{key}' must have both namespace and name. "
+                f"Got namespace='{namespace}', name='{name}'"
+            )
+        
+        # Validate format - alphanumeric + underscore only
+        if not re.match(r'^[a-zA-Z0-9_]+:[a-zA-Z0-9_]+$', key):
+            raise ValueError(
+                f"Registry key '{key}' contains invalid characters. "
+                f"Use only letters, numbers, underscores. Example: 'utils:my_logger'"
+            )
+    
+    def register(self, key: str, item: Any) -> None:
+        """Register an item in the registry for dependency injection.
+        
+        Args:
+            key: Registry key in 'namespace:name' format (e.g., 'utils:logger')
+            item: The item to register. Can be any object.
+            
+        Raises:
+            ValueError: If key format is invalid or key already exists
+            
+        Example:
+            >>> app = Application()
+            >>> logger = Logger()
+            >>> app.register('utils:logger', logger)
+            >>> # Later in your API:
+            >>> logger = self.registry.get('utils:logger')
+        """
+        self._validate_registry_key(key)
+        
+        if key in self.registry:
+            raise ValueError(
+                f"Registry key '{key}' already exists. "
+                f"Use a different key or remove the existing registration first."
+            )
+        
+        self.registry[key] = item
+        
+        # Re-inject registry into existing APIs
+        for api in self.apis.values():
+            setattr(api, 'registry', self.registry)
+    
+    def get_registry_item(self, key: str, default: Optional[T] = None) -> Optional[T]:
+        """Get an item from the registry with type preservation.
+        
+        Args:
+            key: Registry key in 'namespace:name' format
+            default: Default value if key not found
+            
+        Returns:
+            The registered item or default value
+            
+        Example:
+            >>> logger = app.get_registry_item('utils:logger')
+            >>> cache = app.get_registry_item('utils:cache', default=DummyCache())
+        """
+        return self.registry.get(key, default)
+    
+    def has_registry_item(self, key: str) -> bool:
+        """Check if an item exists in the registry.
+        
+        Args:
+            key: Registry key to check
+            
+        Returns:
+            True if key exists in registry, False otherwise
+        """
+        return key in self.registry
+    
+    def list_registry_keys(self, namespace: Optional[str] = None) -> List[str]:
+        """List all registry keys, optionally filtered by namespace.
+        
+        Args:
+            namespace: Optional namespace to filter by (e.g., 'utils', 'services')
+            
+        Returns:
+            List of registry keys
+            
+        Example:
+            >>> app.list_registry_keys()  # ['services:email', 'utils:logger']
+            >>> app.list_registry_keys('utils')  # ['utils:logger']
+        """
+        if namespace is None:
+            return list(self.registry.keys())
+        
+        prefix = f"{namespace}:"
+        return [key for key in self.registry.keys() if key.startswith(prefix)]
 
     async def __call__(self, scope, receive, send, **kwargs):
         return await self.app(scope, receive, send, **kwargs)

@@ -270,9 +270,6 @@ class TestParsersAndMiddleware(unittest.IsolatedAsyncioTestCase):
         class DummyService:
             def __init__(self, *, id: str):
                 self.id = id
-                self.services = None
-            def set_services(self, services: dict):
-                self.services = services
 
         shared = DummyService(id="shared")
 
@@ -280,15 +277,15 @@ class TestParsersAndMiddleware(unittest.IsolatedAsyncioTestCase):
             resource = "/a"
             @API.endpoint("/", methods=["GET"])
             async def a(self, scope, receive, send, **kwargs):
-                return await self.response({"sid": id(self.services["shared"])})
+                return await self.response({"sid": id(self.registry["services:shared"])})
 
         class B(API):
             resource = "/b"
             @API.endpoint("/", methods=["GET"])
             async def b(self, scope, receive, send, **kwargs):
-                return await self.response({"sid": id(self.services["shared"])})
+                return await self.response({"sid": id(self.registry["services:shared"])})
 
-        app = Application(apis=[A(), B()], services=[shared])
+        app = Application(apis=[A(), B()], registry={"services:shared": shared})
 
         scope_a = {"type": "http", "method": "GET", "path": "/a", "headers": []}
         scope_b = {"type": "http", "method": "GET", "path": "/b", "headers": []}

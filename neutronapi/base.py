@@ -13,7 +13,11 @@ from typing import (
     TypeVar,
     Union,
     Type,
+    TYPE_CHECKING,
 )
+
+if TYPE_CHECKING:
+    pass
 from urllib.parse import parse_qs
 
 from neutronapi import exceptions
@@ -34,16 +38,28 @@ Send = Callable[[Dict[str, Any]], None]
 
 
 class Response:
-    """HTTP Response handler."""
+    """HTTP Response handler for API responses.
+    
+    Handles JSON serialization, status codes, and headers for HTTP responses.
+    """
 
     def __init__(
         self,
         body: Any = None,
         status_code: int = 200,
-        headers: List[Tuple[bytes, bytes]] = None,
+        headers: Optional[List[Tuple[bytes, bytes]]] = None,
         media_type: str = "application/json",
         indent: int = 2,
-    ):
+    ) -> None:
+        """Initialize HTTP response.
+        
+        Args:
+            body: Response body data (will be JSON-serialized)
+            status_code: HTTP status code (default: 200)
+            headers: List of header tuples as (name, value) bytes
+            media_type: Content-Type header value
+            indent: JSON indentation for pretty printing
+        """
         self.body = body
         self.status_code = status_code
         self.headers = headers or []
@@ -140,6 +156,20 @@ class API:
     - POST: Request uses request_schema, response uses response_schema
     - PUT/PATCH: Request uses request_schema, response uses response_schema
     - DELETE: No request/response schema (returns 204 No Content)
+    
+    Dependency Injection:
+    The Application automatically injects the 'registry' attribute:
+    - self.registry: Dict[str, Any] - Universal registry for all injected components
+    
+    Example:
+        >>> class UserAPI(API):
+        ...     resource = "/users"
+        ...
+        ...     @API.endpoint("/", methods=["GET"])
+        ...     async def list_users(self, scope, receive, send):
+        ...         logger = self.registry.get('utils:logger')
+        ...         db = self.registry.get('services:database')
+        ...         # ... your logic here
     """
 
     model: Optional[Type[Model]] = None
@@ -162,6 +192,9 @@ class API:
 
     # Documentation control
     hidden: bool = False  # If True, exclude entire API from documentation
+    
+    # Dependency injection attributes (set by Application)
+    registry: Dict[str, Any]  # Universal registry for all components
 
     def __init__(
         self,
@@ -210,10 +243,17 @@ class API:
 
         self._register_endpoints()
 
-    def params(self, scope):
-        """Get the current request parameters."""
+    def params(self, scope: Scope) -> Dict[str, Union[str, List[str]]]:
+        """Get the current request parameters.
+        
+        Args:
+            scope: ASGI scope dict
+            
+        Returns:
+            Dict of query parameters with string values or lists of strings
+        """
         query_string = scope.get("query_string", b"").decode()
-        params = {}
+        params: Dict[str, Union[str, List[str]]] = {}
 
         if query_string:
             parsed = parse_qs(query_string)
@@ -221,8 +261,15 @@ class API:
             params = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
         return params
 
-    async def _process_client_params(self, scope: Dict) -> Dict:
-        """Process client-side parameters for pagination and ordering."""
+    async def _process_client_params(self, scope: Scope) -> Scope:
+        """Process client-side parameters for pagination and ordering.
+        
+        Args:
+            scope: ASGI scope dict
+            
+        Returns:
+            Modified scope with pagination and ordering parameters
+        """
         params = self.params(scope)
         scope["params"] = params
 
@@ -448,14 +495,31 @@ class API:
         """Close WebSocket connection."""
         await send({"type": "websocket.close", "code": 1000})
 
-    async def get_base_queryset(self, scope: Dict):
-        """Get base queryset without filtering."""
+    async def get_base_queryset(self, scope: Scope) -> Any:
+        """Get base queryset without filtering.
+        
+        Args:
+            scope: ASGI scope dict
+            
+        Returns:
+            Base model queryset
+            
+        Raises:
+            NotImplementedError: If no model is defined
+        """
         if not self.model:
             raise NotImplementedError("Model must be defined")
         return self.model.objects.using(self.model.db_alias)
 
-    async def get_queryset(self, scope: Dict):
-        """Get queryset with ordering applied."""
+    async def get_queryset(self, scope: Scope) -> Any:
+        """Get queryset with ordering applied.
+        
+        Args:
+            scope: ASGI scope dict with ordering parameters
+            
+        Returns:
+            Queryset with ordering applied
+        """
         queryset = await self.get_base_queryset(scope)
 
         # Handle ordering
