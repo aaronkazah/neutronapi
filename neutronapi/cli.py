@@ -115,21 +115,32 @@ def main() -> None:
             print("Both 'apps/entry.py' and 'apps/settings.py' must exist at the same level.")
             sys.exit(1)
 
-    try:
-        command = commands[command_name]
-        if asyncio.iscoroutinefunction(command.handle):
-            asyncio.run(command.handle(args))
-        else:
-            command.handle(args)
-    except KeyboardInterrupt:
-        print("\nOperation cancelled by user.")
-        os._exit(1)
-    except Exception as e:
-        print(f"\nAn error occurred while running command '{command_name}': {e}")
-        if os.getenv("DEBUG", "False").lower() == "true":
-            import traceback
-            traceback.print_exc()
-        sys.exit(1)
+    async def _dispatch():
+        try:
+            command = commands[command_name]
+            handle = getattr(command, 'handle', None)
+            if handle is None:
+                raise RuntimeError("Command has no handle()")
+            if asyncio.iscoroutinefunction(handle):
+                result = await handle(args)
+            else:
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(None, handle, args)
+            if isinstance(result, int):
+                sys.exit(result)
+        except KeyboardInterrupt:
+            print("\nOperation cancelled by user.")
+            sys.exit(1)
+        except SystemExit:
+            raise
+        except Exception as e:
+            print(f"\nAn error occurred while running command '{command_name}': {e}")
+            if os.getenv("DEBUG", "False").lower() == "true":
+                import traceback
+                traceback.print_exc()
+            sys.exit(1)
+
+    asyncio.run(_dispatch())
 
 
 if __name__ == "__main__":

@@ -3,8 +3,8 @@ Interactive shell command.
 Launch an interactive Python shell with project context.
 """
 import os
-import subprocess
 import sys
+import asyncio
 from typing import List
 
 
@@ -14,7 +14,7 @@ class Command:
     def __init__(self):
         self.help = "Launch an interactive Python shell with the project initialized"
 
-    def handle(self, args: List[str]) -> None:
+    async def handle(self, args: List[str]) -> None:
         """
         Launch an interactive Python shell with the project initialized.
 
@@ -84,14 +84,18 @@ print()
         # Launch Python shell with asyncio support
         try:
             # Try IPython first (nicer interface)
-            try:
-                print("Starting IPython shell...")
-                subprocess.run([sys.executable, "-m", "IPython"], env=env)
-            except ImportError:
+            print("Starting IPython shell...")
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "IPython", env=env
+            )
+            rc = await proc.wait()
+            if rc != 0:
                 # Fallback to regular Python with asyncio
                 print("Starting Python shell with asyncio support...")
-                subprocess.run([sys.executable, "-m", "asyncio"], env=env)
-
+                proc2 = await asyncio.create_subprocess_exec(
+                    sys.executable, "-m", "asyncio", env=env
+                )
+                await proc2.wait()
         except KeyboardInterrupt:
             print("\nShell interrupted by user")
         except Exception as e:

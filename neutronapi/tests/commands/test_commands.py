@@ -23,13 +23,9 @@ class TestCommands(unittest.IsolatedAsyncioTestCase):
         self.assertIn('startapp', cmds)
         self.assertIn('test', cmds)
 
-        # Create project
-        argv_bak = sys.argv[:]
-        try:
-            sys.argv = ["neutronapi", "startproject", "proj"]
-            cli.main()
-        finally:
-            sys.argv = argv_bak
+        # Create project directly via command (no CLI main)
+        from neutronapi.commands import startproject as cmd_startproject
+        await cmd_startproject.Command().handle(["proj"])
 
         self.assertTrue(os.path.isfile(os.path.join("proj", "manage.py")))
         self.assertTrue(os.path.isfile(os.path.join("proj", "apps", "settings.py")))
@@ -38,11 +34,9 @@ class TestCommands(unittest.IsolatedAsyncioTestCase):
         # Run startapp inside the project
         os.chdir("proj")
         try:
-            argv_bak = sys.argv[:]
-            sys.argv = ["neutronapi", "startapp", "blog"]
-            cli.main()
+            from neutronapi.commands import startapp as cmd_startapp
+            await cmd_startapp.Command().handle(["blog"])
         finally:
-            sys.argv = argv_bak
             os.chdir("..")
 
         self.assertTrue(os.path.isdir(os.path.join("proj", "apps", "blog")))

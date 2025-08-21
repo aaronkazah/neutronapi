@@ -20,7 +20,7 @@ class Command:
     def __init__(self):
         self.help = "Create a new app in ./apps"
 
-    def handle(self, args: List[str]) -> None:
+    async def handle(self, args: List[str]) -> None:
         if not args:
             print("Usage: neutronapi startapp <app_name>")
             return

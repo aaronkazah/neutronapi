@@ -28,16 +28,9 @@ class Command:
         except Exception as e:
             print(f"Warning: Exception during database shutdown: {e}")
 
-    def run_forced_shutdown(self):
-        """Run shutdown in appropriate event loop context."""
-        try:
-            asyncio.run(self.safe_shutdown())
-        except RuntimeError as e:
-            if "asyncio.run() cannot be called from a running event loop" in str(e):
-                loop = asyncio.get_event_loop()
-                loop.run_until_complete(self.safe_shutdown())
-            else:
-                raise
+    async def run_forced_shutdown(self):
+        """Run shutdown in the current event loop context."""
+        await self.safe_shutdown()
 
     def _bootstrap_sqlite(self):
         # Use in-memory sqlite as the default test DB
@@ -206,7 +199,7 @@ class Command:
                 except Exception:
                     pass
 
-    def handle(self, args: List[str]) -> None:
+    async def handle(self, args: List[str]) -> int:
         """
         Run database tests with dot notation support.
 
@@ -235,7 +228,7 @@ class Command:
         if provider_env in ('asyncpg', 'postgres', 'postgresql'):
             print('Bootstrapping PostgreSQL test database...')
             try:
-                success = asyncio.run(self._bootstrap_postgres())
+                success = await self._bootstrap_postgres()
             except Exception:
                 success = False
             if not success:
@@ -275,7 +268,7 @@ class Command:
                 print(f"Warning: Failed to apply project migrations: {e}")
 
         try:
-            asyncio.run(apply_project_migrations())
+            await apply_project_migrations()
         except Exception:
             pass
 
@@ -317,7 +310,7 @@ class Command:
         
         # Run the bootstrap
         try:
-            asyncio.run(bootstrap_test_models())
+            await bootstrap_test_models()
         except Exception as e:
             print(f"Error during test model bootstrap: {e}")
 
@@ -413,7 +406,8 @@ class Command:
                 return
 
             print(f"Running {count} test(s)...")
-            result = runner.run(suite)
+            # Run unittest in a worker thread to avoid event-loop conflicts
+            result = await asyncio.to_thread(runner.run, suite)
 
             if not result.wasSuccessful():
                 print(f"\nTests failed: {len(result.failures)} failures, {len(result.errors)} errors")
@@ -438,11 +432,14 @@ class Command:
                         cov.html_report(directory='htmlcov')
             except Exception as e:
                 print(f"Warning: coverage reporting failed: {e}")
-            self.run_forced_shutdown()
+            await self.run_forced_shutdown()
             # Best-effort: stop ephemeral postgres if we started it
             try:
-                asyncio.run(self._teardown_postgres())
+                await self._teardown_postgres()
             except Exception:
                 pass
-            # Hard-exit to avoid hanging event loops/threads
+            # Default: hard-exit to ensure full shutdown (no lingering loops/threads)
+            # For programmatic callers/tests, set NEUTRONAPI_TEST_RETURN=1 to receive the code instead.
+            if os.getenv('NEUTRONAPI_TEST_RETURN', '0') == '1':
+                return exit_code
             os._exit(exit_code)

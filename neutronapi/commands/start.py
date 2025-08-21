@@ -10,7 +10,7 @@ class Command:
     def __init__(self):
         self.help = "Start the ASGI server"
 
-    def handle(self, args: List[str]) -> None:
+    async def handle(self, args: List[str]) -> None:
         """
         Start ASGI server with uvicorn.
 
@@ -56,16 +56,9 @@ class Command:
 
             # Run check with timeout to prevent hanging
             try:
-                # Set a 3 second timeout for migration check
-                asyncio.run(asyncio.wait_for(_check_unapplied(), timeout=3.0))
-            except (RuntimeError, asyncio.TimeoutError):
-                # Event loop already running or timeout - try alternative approach
-                try:
-                    loop = asyncio.get_event_loop()
-                    loop.run_until_complete(asyncio.wait_for(_check_unapplied(), timeout=3.0))
-                except (asyncio.TimeoutError, Exception):
-                    # Migration check timed out or failed - continue anyway
-                    pass
+                await asyncio.wait_for(_check_unapplied(), timeout=3.0)
+            except asyncio.TimeoutError:
+                pass
         except Exception:
             # Never block startup for migration warnings
             pass
@@ -268,9 +261,12 @@ class Command:
         else:
             print("Quit the server with CONTROL-C.")
 
-        # Run the server
+        # Run the server using async Server.serve
         try:
-            uvicorn.run(app_or_import_string, **uvicorn_kwargs)
+            from uvicorn import Config, Server
+            config = Config(app_or_import_string, **uvicorn_kwargs)
+            server = Server(config)
+            await server.serve()
         except KeyboardInterrupt:
             print("\nServer stopped.")
         except Exception as e:

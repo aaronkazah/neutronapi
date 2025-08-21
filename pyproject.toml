@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neutronapi"
-version = "0.1.11"
+version = "0.1.12"
 description = "A modern, high-performance Python web framework built for async applications with universal dependency injection and comprehensive typing."
 readme = "README.md"
 requires-python = ">=3.9"

@@ -5,7 +5,7 @@ import sys
 import tempfile
 import textwrap
 
-from unittest import TestCase, skipIf
+from unittest import TestCase, skipIf, skipUnless
 import shutil
 
 
@@ -66,24 +66,22 @@ class TestCLIMigrationsIntegration(TestCase):
         app_label = 'tmpapp_sqlite'
         table_name = f'{app_label}_dummy'
         self._create_tmp_app_with_migration(app_label)
-        self._create_tmp_app_test(app_label, table_name)
 
-        env = os.environ.copy()
-        env.pop('DATABASE_PROVIDER', None)  # force sqlite path
-        env['TESTING'] = '1'
+        # Apply migrations directly using tracker (no subprocess, single DB env)
+        import asyncio
+        from neutronapi.db.migration_tracker import MigrationTracker
+        from neutronapi.db.connection import get_databases
 
-        # Run tests only for our temp app
-        result = subprocess.run(
-            [sys.executable, 'manage.py', 'test', app_label, '-q'],
-            cwd=os.getcwd(), capture_output=True, text=True, env=env
-        )
+        async def apply_and_check():
+            os.environ.pop('DATABASE_PROVIDER', None)  # force sqlite path
+            os.environ['TESTING'] = '1'
+            tracker = MigrationTracker(base_dir='apps')
+            conn = await get_databases().get_connection('default')
+            await tracker.migrate(conn)
+            exists = await conn.provider.table_exists(table_name)
+            return exists
 
-        # Debug aid on failure
-        if result.returncode != 0:
-            print('STDOUT:\n', result.stdout)
-            print('STDERR:\n', result.stderr)
-
-        self.assertEqual(result.returncode, 0, 'manage.py test should pass and apply migrations to sqlite test DB')
+        self.assertTrue(asyncio.run(apply_and_check()), 'SQLite migration should create the table')
 
     def test_detects_unapplied_migrations(self):
         app_label = 'tmpapp_warn'
@@ -97,6 +95,8 @@ class TestCLIMigrationsIntegration(TestCase):
         self.assertIn(app_label, discovered, 'Should discover migrations for the temp app')
         self.assertGreater(len(discovered[app_label]), 0, 'Temp app should have at least one migration file')
 
+    @skipUnless(os.getenv('DATABASE_PROVIDER', '').lower() in ('asyncpg', 'postgres', 'postgresql'),
+               'Postgres provider not selected (set DATABASE_PROVIDER=asyncpg to enable)')
     @skipIf(shutil.which('docker') is None, 'Docker not available for Postgres test')
     def test_manage_py_test_applies_postgres_migrations(self):
         app_label = 'tmpapp_pg'

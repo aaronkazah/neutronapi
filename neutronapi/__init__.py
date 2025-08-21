@@ -2,7 +2,7 @@
 
 """
 
-__version__ = "0.1.11"
+__version__ = "0.1.12"
 
 from .base import API, Response, Endpoint
 from .application import Application
