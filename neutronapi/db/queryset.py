@@ -519,7 +519,11 @@ class QuerySet:
         return iter(self._result_cache)
 
     def __await__(self):
-        return self.all().__await__()
+        async def _populate_and_return_self():
+            if self._result_cache is None:
+                self._result_cache = await self.all()
+            return self
+        return _populate_and_return_self().__await__()
 
     async def __aiter__(self):
         results = await self.all()
