@@ -10,8 +10,13 @@ from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
 import inspect
 import datetime
 from .connection import get_databases, DatabaseType
-
+from .queryset import QuerySet
 from .fields import BaseField, CharField
+
+
+class classproperty(property):
+    def __get__(self, owner_self, owner_cls):
+        return self.fget(owner_cls)
 
 
 class ModelBase(type):
@@ -39,15 +44,11 @@ class ModelBase(type):
 
         cls._fields = fields
         
-        # Set objects as a class attribute for better IDE support
-        cls.objects = cls._Manager(cls)
-        
         return cls
 
 
 class Model(metaclass=ModelBase):
     _fields: Dict[str, BaseField]
-    objects: '_Manager'  # Set by metaclass, here for type hints
 
     def __init__(self, **kwargs: Any):
         for name, field in self._fields.items():
@@ -133,6 +134,14 @@ class Model(metaclass=ModelBase):
         sql = f"INSERT INTO {table_ident} ({', '.join(cols)}) VALUES ({placeholders})"
         await db.execute(sql, vals if is_pg else tuple(vals))
         await db.commit()
+
+    @classproperty
+    def objects(cls) -> QuerySet:
+        """Return a QuerySet bound to the model's table."""
+        from .connection import get_databases
+        db = get_databases()  # This should return the database manager
+        table_name = cls.get_table_name()
+        return QuerySet(db, table_name, model=cls)
 
     class _Manager:
         def __init__(self, model_cls: type['Model']):
