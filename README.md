@@ -1,8 +1,8 @@
 # NeutronAPI
 
-**A fast Python web framework that's like Django, but built for modern async applications.**
+**A modern, high-performance Python web framework built for async applications.**
 
-Stop fighting with complex setups. NeutronAPI gives you everything you need to build APIs quickly: database models, migrations, background tasks, and a simple command-line interface. Perfect if you want the power of Django but with async performance.
+NeutronAPI provides everything you need to build robust APIs quickly: universal dependency injection, comprehensive type support, database models with migrations, background tasks, and an intuitive command-line interface. Designed for performance, developer experience, and production readiness.
 
 ## Installation
 
@@ -26,6 +26,15 @@ python manage.py start               # Dev mode (auto-reload)
 # 4. Test
 python manage.py test
 ```
+
+## Key Features
+
+✅ **Universal Registry System** - Clean dependency injection with `namespace:name` keys  
+✅ **Comprehensive Type Support** - Full typing with IDE integration  
+✅ **High Performance** - Built on uvicorn/ASGI for maximum speed  
+✅ **Database ORM** - Models, migrations, and async queries  
+✅ **Background Tasks** - Scheduled and async task execution  
+✅ **Developer Experience** - Rich docstrings, validation, and error messages  
 
 ## Getting Started Tutorial
 
@@ -66,6 +75,10 @@ class PostAPI(API):
     
     @API.endpoint("/", methods=["GET"])
     async def list_posts(self, scope, receive, send, **kwargs):
+        # Access registry dependencies
+        logger = self.registry.get('utils:logger')
+        cache = self.registry.get('services:cache')
+        
         posts = [{"id": 1, "title": "Hello World"}]
         return await self.response(posts)
     
@@ -76,23 +89,40 @@ class PostAPI(API):
         return await self.response({"id": 2, "title": data.get("title", "New Post")})
 ```
 
-**5. Register API, Middlewares, Services in `apps/entry.py`**
+**5. Register API, Middlewares, Dependencies in `apps/entry.py`**
 ```python
 from neutronapi.application import Application
 from neutronapi.middleware.compression import CompressionMiddleware
 from neutronapi.middleware.allowed_hosts import AllowedHostsMiddleware
 from apps.posts.api import PostAPI
 
-# Middlewares and services are instances only
+# Example dependencies
+class Logger:
+    def info(self, message: str) -> None:
+        print(f"[INFO] {message}")
+
+class CacheService:
+    def __init__(self):
+        self._cache = {}
+    
+    def get(self, key: str) -> any:
+        return self._cache.get(key)
+    
+    def set(self, key: str, value: any) -> None:
+        self._cache[key] = value
+
+# Modern registry-based dependency injection
 app = Application(
     apis=[PostAPI()],
     middlewares=[
         AllowedHostsMiddleware(allowed_hosts=["localhost", "127.0.0.1"]),
         CompressionMiddleware(minimum_size=512),
     ],
-    services=[
-        # Example: EventBus(id="event_bus"), EmailService(id="email")
-    ],
+    registry={
+        'utils:logger': Logger(),
+        'services:cache': CacheService(),
+        'services:email': EmailService(),
+    }
 )
 ```
 
@@ -100,6 +130,74 @@ app = Application(
 ```bash
 python manage.py start
 # Visit: http://127.0.0.1:8000/posts
+```
+
+## Universal Registry System
+
+The registry provides clean dependency injection with namespaced keys:
+
+```python
+from neutronapi.application import Application
+
+# Register dependencies with namespace:name pattern
+app = Application(
+    registry={
+        'utils:logger': Logger(),
+        'utils:cache': RedisCache(),
+        'services:email': EmailService(), 
+        'services:database': DatabaseService(),
+        'modules:auth': AuthModule(),
+    }
+)
+
+# Access in APIs
+class UserAPI(API):
+    @API.endpoint("/register", methods=["POST"])
+    async def register(self, scope, receive, send, **kwargs):
+        # Type-safe access with IDE support
+        logger = self.registry.get('utils:logger')
+        email = self.registry.get('services:email')
+        
+        logger.info("User registration started")
+        await email.send_welcome_email(user_data)
+        
+        return await self.response({"status": "registered"})
+
+# Dynamic registration
+app.register('utils:metrics', MetricsCollector())
+app.register('services:payment', PaymentProcessor())
+
+# Registry utilities
+print(app.list_registry_keys())  # All keys
+print(app.list_registry_keys('utils'))  # Just utils namespace
+print(app.has_registry_item('services:email'))  # True
+```
+
+## Comprehensive Type Support
+
+NeutronAPI includes full type hints with IDE integration:
+
+```python
+from typing import Dict, List, Optional
+from neutronapi.base import API, Response
+from neutronapi.application import Application
+
+class TypedAPI(API):
+    resource = "/api"
+    
+    @API.endpoint("/users", methods=["GET"])
+    async def get_users(self, scope: Dict[str, Any], receive, send) -> Response:
+        # Full type support with autocomplete
+        cache: CacheService = self.registry.get('services:cache')
+        users: List[Dict[str, str]] = cache.get('users') or []
+        
+        return await self.response(users)
+
+# Type-safe registry access
+def get_typed_dependency[T](app: Application, key: str) -> Optional[T]:
+    return app.get_registry_item(key)
+
+logger = get_typed_dependency[Logger](app, 'utils:logger')
 ```
 
 ## Project Structure
@@ -141,6 +239,7 @@ app = Application(
     tasks={"cleanup": CleanupTask()}
 )
 ```
+
 ## Database Models
 
 ```python
@@ -171,7 +270,6 @@ python manage.py start --host 0.0.0.0 --port 8080 --workers 4
 ```bash
 # SQLite (default)
 python manage.py test
-
 
 # Specific tests
 python manage.py test app.tests.test_models.TestUser.test_creation
@@ -230,38 +328,58 @@ async def upload_file(self, scope, receive, send, **kwargs):
     return await self.response({"status": "uploaded"})
 ```
 
-## Services (Optional - Dependency Injection)
-
-Services provide dependency injection for shared components like databases, email, caching, etc. You don't have to use them - they're just a clean way to share dependencies across your APIs.
+## Advanced Registry Usage
 
 ```python
-# Email service example
-class EmailService:
-    def __init__(self):
-        self.id = "email"  # Required
-    
-    async def send(self, to, subject, body):
-        # Your email logic here
+from neutronapi.application import Application
+from typing import Protocol
+
+# Define interfaces for better type safety
+class EmailServiceProtocol(Protocol):
+    async def send(self, to: str, subject: str, body: str) -> None: ...
+
+class MetricsProtocol(Protocol):
+    def increment(self, metric: str) -> None: ...
+
+# Implementation
+class SMTPEmailService:
+    async def send(self, to: str, subject: str, body: str) -> None:
+        # SMTP implementation
         pass
 
+class PrometheusMetrics:
+    def increment(self, metric: str) -> None:
+        # Prometheus implementation
+        pass
+
+# Register with clear namespacing
 app = Application(
-    apis=[UserAPI()],
-    services=[EmailService()]  # Optional - only if you need dependency injection
+    registry={
+        'services:email': SMTPEmailService(),
+        'services:metrics': PrometheusMetrics(),
+        'utils:logger': StructuredLogger(),
+        'modules:auth': JWTAuthModule(),
+    }
 )
 
-# Access in your API
-class UserAPI(API):
-    @API.endpoint("/register", methods=["POST"])
-    async def register(self, scope, receive, send, **kwargs):
-        # Use the service
-        await self.services["email"].send("user@example.com", "Welcome!", "Hello!")
-        return await self.response({"status": "registered"})
+# Usage with type safety
+class OrderAPI(API):
+    @API.endpoint("/orders", methods=["POST"])
+    async def create_order(self, scope, receive, send, **kwargs):
+        email: EmailServiceProtocol = self.registry.get('services:email')
+        metrics: MetricsProtocol = self.registry.get('services:metrics')
+        
+        # Your business logic here
+        metrics.increment('orders.created')
+        await email.send('user@example.com', 'Order Confirmed', 'Thanks!')
+        
+        return await self.response({"status": "created"})
 ```
 
-## Exceptions
+## Error Handling
 
 ```python
-from neutronapi.exceptions import ValidationError, NotFound
+from neutronapi.exceptions import ValidationError, NotFound, APIException
 
 @API.endpoint("/users/<int:user_id>", methods=["GET"])
 async def get_user(self, scope, receive, send, **kwargs):
@@ -275,4 +393,22 @@ async def get_user(self, scope, receive, send, **kwargs):
         raise NotFound("User not found")
     
     return await self.response(user)
+
+# Custom exceptions
+class BusinessLogicError(APIException):
+    status_code = 422
+    
+    def __init__(self, message: str = "Business logic error"):
+        super().__init__(message, type="business_error")
 ```
+
+## Why NeutronAPI?
+
+- **🚀 Performance**: Built on ASGI/uvicorn for maximum throughput
+- **🏗️ Architecture**: Clean separation with universal dependency injection  
+- **🔒 Type Safety**: Comprehensive typing with IDE support
+- **🎯 Developer Experience**: Rich error messages, validation, and documentation
+- **📦 Batteries Included**: ORM, migrations, background tasks, middleware
+- **🔧 Production Ready**: Multi-worker support, monitoring, and deployment tools
+
+Perfect for building modern APIs, microservices, and high-performance web applications.

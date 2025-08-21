@@ -1,5 +1,5 @@
 """
-Minimal Django-like connections manager and connection wrapper.
+Database connections manager and connection wrapper.
 
 Provides:
 - DatabaseType enum
@@ -121,7 +121,7 @@ class ConnectionsManager:
         self._connections.clear()
 
 
-# Global manager (Django-like)
+# Global connection manager
 CONNECTIONS: Optional[ConnectionsManager] = None
 
 

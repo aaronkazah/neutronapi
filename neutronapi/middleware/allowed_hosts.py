@@ -13,7 +13,7 @@ except Exception:  # pragma: no cover - fallback for library-only context
 
 
 class AllowedHostsMiddleware:
-    """Django-style ALLOWED_HOSTS validation middleware."""
+    """ALLOWED_HOSTS validation middleware."""
 
     def __init__(self, app: Callable | None = None, allowed_hosts: List[str] = None):
         self.app = app

@@ -435,7 +435,7 @@ class OpenAPIGenerator:
         return self._generate_request_body(api, None)
 
     def _convert_path_to_openapi(self, path: str) -> str:
-        """Convert Django-style path parameters to OpenAPI format."""
+        """Convert path parameters to OpenAPI format."""
 
         # Convert <str:id> to {id}, <int:count> to {count}, etc.
         def replace_param(match):

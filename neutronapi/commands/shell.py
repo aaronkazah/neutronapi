@@ -1,5 +1,5 @@
 """
-Django-style shell command.
+Interactive shell command.
 Launch an interactive Python shell with project context.
 """
 import os
@@ -9,7 +9,7 @@ from typing import List
 
 
 class Command:
-    """Django-style shell command class."""
+    """Interactive shell command class."""
 
     def __init__(self):
         self.help = "Launch an interactive Python shell with the project initialized"
@@ -73,7 +73,7 @@ print()
 """
 
         # Write startup script to a temporary file
-        startup_file = "/tmp/django_shell_startup.py"
+        startup_file = "/tmp/neutron_shell_startup.py"
         with open(startup_file, "w") as f:
             f.write(startup_code)
 

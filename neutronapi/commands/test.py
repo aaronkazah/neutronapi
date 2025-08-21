@@ -1,6 +1,6 @@
 """
-Django-style test command for running database tests.
-Runs database tests with Django-like dot notation support.
+Test command for running database tests.
+Runs database tests with dot notation support for specific tests.
 """
 import os
 import sys
@@ -10,10 +10,10 @@ from typing import List
 
 
 class Command:
-    """Django-style test command class."""
+    """Test command class for running database tests."""
 
     def __init__(self):
-        self.help = "Run database tests with Django-like dot notation support"
+        self.help = "Run database tests with dot notation support"
 
     async def safe_shutdown(self):
         """Safely shutdown database connections with timeout."""
@@ -186,7 +186,7 @@ class Command:
 
     def handle(self, args: List[str]) -> None:
         """
-        Run database tests with Django-like dot notation support.
+        Run database tests with dot notation support.
 
         Usage:
             python manage.py test                    # Run all tests

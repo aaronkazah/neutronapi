@@ -1,5 +1,5 @@
 """
-Django-style settings configuration for NeutronAPI.
+Settings configuration for NeutronAPI.
 """
 import os
 import sys
@@ -15,7 +15,7 @@ class ImproperlyConfigured(Exception):
 class Settings:
     """
     Settings object that loads configuration from a settings module.
-    Similar to Django's settings pattern.
+    Provides a centralized configuration management system.
     """
 
     # Required settings that must be defined
