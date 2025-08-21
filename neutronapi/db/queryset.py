@@ -5,7 +5,12 @@ except Exception:  # pragma: no cover
     np = None
 import os
 import re
-from typing import Optional, Dict, List, Any, Union
+from typing import Optional, Dict, List, Any, Union, TypeVar, Generic, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .models import Model
+
+T = TypeVar('T', bound='Model')
 
 
 class Q:
@@ -41,256 +46,9 @@ class Q:
         return obj
 
 
-class Object:
-    """
-    A dictionary-like object that allows attribute access to its keys,
-    and provides methods to interact with the database.
-    """
-
-    def __init__(self, data: Dict[str, Any], queryset: 'QuerySet'):
-        super().__setattr__('_data', data)
-        super().__setattr__('_queryset', queryset)
-
-    def __getattr__(self, name: str) -> Any:
-        try:
-            value = self._data[name]
-            # Handle timestamp fields automatically
-            if name in ['created', 'modified'] and value is not None:
-                if isinstance(value, str):
-                    try:
-                        import datetime
-                        return datetime.datetime.fromisoformat(value)
-                    except (ValueError, TypeError):
-                        # If conversion fails, return as-is
-                        return value
-            return value
-        except KeyError:
-            raise AttributeError(f"'Object' object has no attribute '{name}'")
-
-    def __setattr__(self, name: str, value: Any):
-        if name.startswith('_'):
-            super().__setattr__(name, value)
-        else:
-            self._data[name] = value
-
-    def __setitem__(self, key: str, value: Any):
-        self._data[key] = value
-
-    def __getitem__(self, key: str) -> Any:
-        return self._data[key]
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return self._data.get(key, default)
-
-    def __repr__(self) -> str:
-        key = self._data.get('key') or self._data.get('id')
-        return f"<Object: {key}>"
-
-    async def save(self):
-        # Validate before saving
-        await self.validate()
-        
-        # Set timestamps
-        now = datetime.datetime.now(tz=datetime.timezone.utc)
-        if not self._data.get('created'):
-            self._data['created'] = now
-        self._data['modified'] = now
-        
-        if 'id' not in self._data:
-            raise ValueError("Cannot save object without an 'id'")
-
-        updates = self._data.copy()
-        obj_id = updates.pop('id')
-        updates.pop('created', None)
-
-        await self._queryset.filter(id=obj_id).update(**updates)
-        updated_obj = await self._queryset.filter(id=obj_id).first()
-        if updated_obj:
-            super().__setattr__('_data', updated_obj._data)
-
-    async def delete(self):
-        # Prefer model primary key; do not assume arbitrary key fields
-        key_field = None
-        model = getattr(self._queryset, 'model', None)
-        if model is not None and hasattr(model, '_fields'):
-            try:
-                pk_fields = [name for name, f in model._fields.items() if getattr(f, 'primary_key', False)]
-                if len(pk_fields) == 1:
-                    key_field = pk_fields[0]
-            except Exception:
-                pass
-        if not key_field:
-            raise ValueError("Cannot delete without a primary key; construct QuerySet with a model that defines one.")
-        if key_field not in self._data:
-            raise ValueError(f"Cannot delete object without a '{key_field}' value")
-        await self._queryset.filter(**{key_field: self._data[key_field]}).delete()
-
-    async def refresh_from_db(self):
-        # Prefer model primary key; do not assume arbitrary key fields
-        key_field = None
-        model = getattr(self._queryset, 'model', None)
-        if model is not None and hasattr(model, '_fields'):
-            try:
-                pk_fields = [name for name, f in model._fields.items() if getattr(f, 'primary_key', False)]
-                if len(pk_fields) == 1:
-                    key_field = pk_fields[0]
-            except Exception:
-                pass
-        if not key_field:
-            raise ValueError("Cannot refresh without a primary key; construct QuerySet with a model that defines one.")
-        if key_field not in self._data:
-            raise ValueError(f"Cannot refresh object without a '{key_field}' value")
-
-        updated_obj = await self._queryset.filter(**{key_field: self._data[key_field]}).first()
-        if updated_obj:
-            super().__setattr__('_data', updated_obj._data)
-
-    def _validate_key(self) -> None:
-        """Validate key field following organizational structure."""
-        k = self._data.get('key')
-
-        if not k or len(k) > 1024:
-            raise ValueError("key required and ≤1024 chars")
-
-        # All paths must be file paths and cannot end with a slash
-        if k.endswith("/"):
-            raise ValueError("key must not end with '/'")
-
-        if not k.startswith("/"):
-            raise ValueError("key must start with '/'")
-
-        # Allow URL-encoded characters (% followed by hex digits) in addition to the original allowed characters
-        if not re.match(r"^[a-zA-Z0-9/!_.*'()\-%]+$", k):
-            raise ValueError(
-                f"path contains invalid characters: '{k}' - only alphanumeric, /, !, _, ., *, ', (, ), -, and % are allowed"
-            )
-
-        # Validate organizational structure: first path segment must start with acc- or org-
-        path_parts = k.strip("/").split("/")
-        if len(path_parts) > 0 and path_parts[0]:
-            first_segment = path_parts[0]
-            if not (
-                first_segment.startswith("acc-") or first_segment.startswith("org-")
-            ):
-                raise ValueError(
-                    f"key must begin with either 'acc-' or 'org-' after the root slash. Got: '{first_segment}'"
-                )
-
-    def _validate_name(self) -> None:
-        """Validate name field - can be null but if provided cannot be empty."""
-        name = self._data.get('name')
-        if name is not None and not name.strip():
-            raise ValueError("name cannot be empty if provided")
-
-    def _validate_connections(self) -> None:
-        """Validate connections field - must be a dict with object IDs as keys and dict attrs as values."""
-        connections = self._data.get('connections')
-        if connections is None:
-            return
-
-        if not isinstance(connections, dict):
-            raise ValueError("connections must be a dictionary")
-
-        for connection_id, attrs in connections.items():
-            # Validate connection ID format
-            if not isinstance(connection_id, str):
-                raise ValueError("connection ID must be a string")
-
-            # Validate ID format (should be obj-xxx format)
-            if not connection_id.startswith("obj-"):
-                raise ValueError(
-                    f"connection ID must start with 'obj-': {connection_id}"
-                )
-
-            # Validate attributes
-            if not isinstance(attrs, dict):
-                raise ValueError(
-                    f"connection attributes must be a dictionary for ID: {connection_id}"
-                )
-
-    def get_display_name(self) -> str:
-        """Get display name - returns name if set, otherwise filename from key."""
-        name = self._data.get('name')
-        if name:
-            return name
-
-        # Extract filename from key
-        key = self._data.get('key')
-        if key:
-            filename = os.path.basename(key)
-            # Remove extension if present
-            if "." in filename:
-                return filename.rsplit(".", 1)[0]
-            return filename
-
-        return ""
-
-    def populate(self, key: str) -> None:
-        """Populate folder, parent, and organization fields from the given key path.
-
-        Args:
-            key: The file path key (e.g., '/acc1/element.py')
-
-        Example:
-            For key '/acc1/element.py':
-            - folder becomes '/acc1'
-            - parent becomes '/' # parent directory of the folder not file
-        """
-        self._data['key'] = key
-
-        # Extract folder (directory containing the file)
-        folder_path = os.path.dirname(key)
-        self._data['folder'] = folder_path if folder_path != "/" else "/"
-
-        # Extract parent (parent directory of the folder)
-        if folder_path == "/":
-            # Root folder has no parent
-            self._data['parent'] = None
-        else:
-            parent_path = os.path.dirname(folder_path)
-            self._data['parent'] = parent_path if parent_path != "/" else "/"
-
-    async def validate(self):
-        """Validate the object before saving."""
-        self._validate_key()
-        self._validate_name()
-        self._validate_connections()
-        key = self._data.get('key')
-        if key:
-            self.populate(key)
-
-    # In class Object:
-    def serialize(self) -> Dict[str, Any]:
-        """
-        Returns the object's data as a JSON-serializable dictionary.
-        Datetimes are converted to ISO 8601 strings.
-        """
-        serialized_data = {}
-        
-        # Handle case where _data might not be a dict or items() returns unexpected format
-        if not hasattr(self._data, 'items') or not callable(self._data.items):
-            return serialized_data
-            
-        try:
-            for key, value in self._data.items():
-                if isinstance(value, datetime.datetime):
-                    serialized_data[key] = value.isoformat()
-                elif isinstance(value, np.ndarray):
-                    # Example for handling numpy arrays if they exist
-                    serialized_data[key] = value.tolist()
-                else:
-                    serialized_data[key] = value
-        except (ValueError, TypeError):
-            # If unpacking fails, try to handle the data differently
-            if isinstance(self._data, dict):
-                serialized_data = dict(self._data)
-            else:
-                serialized_data = {"error": "Unable to serialize data"}
-                
-        return serialized_data
 
 
-class QuerySet:
+class QuerySet(Generic[T]):
     """QuerySet for database operations with chaining support.
 
     Note: This class can target any table. Pass the table name explicitly and
@@ -425,7 +183,7 @@ class QuerySet:
         """Return the queryset itself (unevaluated), Django-style."""
         return self._clone()
 
-    async def _fetch_all(self) -> List[Union['Object', Dict, Any]]:
+    async def _fetch_all(self) -> List[Union[T, Dict, Any]]:
         # Ensure provider/dialect is initialized before constructing SQL
         provider = await self._get_provider()
         sql, params = self._build_query()
@@ -450,12 +208,12 @@ class QuerySet:
                     processed_results.append(tuple(row_dict.get(f) for f in self._values_fields))
         return processed_results
 
-    async def first(self) -> Optional[Union['Object', Dict, Any]]:
+    async def first(self) -> Optional[Union[T, Dict, Any]]:
         qs = self.limit(1)
         results = await qs._fetch_all()
         return results[0] if results else None
 
-    async def last(self) -> Optional['Object']:
+    async def last(self) -> Optional[T]:
         if self._values_mode:
             raise TypeError("Cannot call last() after values() or values_list()")
 
@@ -531,7 +289,7 @@ class QuerySet:
         for item in results:
             yield item
 
-    async def get(self, *args, **kwargs) -> 'Object':
+    async def get(self, *args, **kwargs) -> T:
         if self._values_mode:
             raise TypeError("Cannot call get() after values() or values_list()")
 
@@ -545,7 +303,7 @@ class QuerySet:
 
         return results[0]
 
-    async def get_or_none(self, *args, **kwargs) -> Optional['Object']:
+    async def get_or_none(self, *args, **kwargs) -> Optional[T]:
         try:
             return await self.get(*args, **kwargs)
         except (self._model_class.DoesNotExist, MultipleObjectsReturned):
@@ -887,7 +645,7 @@ class QuerySet:
 
         return sql, params
 
-    def _deserialize_result(self, result: Dict[str, Any]) -> Optional['Object']:
+    def _deserialize_result(self, result: Dict[str, Any]) -> Optional[T]:
         if not result:
             return None
 
@@ -904,9 +662,9 @@ class QuerySet:
 
         for field in self._json_fields:
             result_dict.setdefault(field, {})
-        result_dict.setdefault("size", 0)
 
-        return Object(result_dict, self)
+        # Return a Model instance instead of opinionated Object
+        return self.model(**result_dict)
 
 
 

@@ -12,7 +12,13 @@ This provides compatibility for imports like:
 """
 from __future__ import annotations
 
-from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING, TypeVar
+
+if TYPE_CHECKING:
+    from .queryset import QuerySet
+
+Self = TypeVar('Self', bound='Model')
+
 import inspect
 import datetime
 from .connection import get_databases, DatabaseType
@@ -254,8 +260,8 @@ class Model(metaclass=ModelBase):
         await db.execute(sql, params if is_pg else tuple(params))
         await db.commit()
 
-    @classproperty
-    def objects(cls) -> QuerySet:
+    @classproperty  
+    def objects(cls):
         """Return a QuerySet bound to the model's table."""
         return QuerySet(cls)
 
