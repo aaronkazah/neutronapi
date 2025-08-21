@@ -76,10 +76,19 @@ class Model(metaclass=ModelBase):
         for name, field in self._fields.items():
             if name in kwargs:
                 value = kwargs[name]
+                # Convert enum to its value if needed
+                value = self._convert_enum_value(value)
             else:
                 default = getattr(field, 'default', None)
                 value = default() if callable(default) else default
             setattr(self, name, value)
+
+    def _convert_enum_value(self, value):
+        """Convert enum instances to their values for database storage."""
+        import enum
+        if isinstance(value, enum.Enum):
+            return value.value
+        return value
 
     @classmethod
     def describe(cls) -> Dict[str, Any]:
@@ -200,6 +209,8 @@ class Model(metaclass=ModelBase):
                 val = getattr(self, fname, None)
                 if val is None and getattr(field, 'default', None) is not None:
                     val = field.default() if callable(field.default) else field.default
+                # Convert enum to value
+                val = self._convert_enum_value(val)
                 if isinstance(val, datetime.datetime) and not is_pg:
                     val = val.isoformat()
                 # Serialize JSON fields
@@ -237,6 +248,8 @@ class Model(metaclass=ModelBase):
             val = getattr(self, fname, None)
             if val is None and getattr(field, 'default', None) is not None:
                 val = field.default() if callable(field.default) else field.default
+            # Convert enum to value
+            val = self._convert_enum_value(val)
             if isinstance(val, datetime.datetime) and not is_pg:
                 val = val.isoformat()
             # Serialize JSON fields

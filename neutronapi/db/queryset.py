@@ -20,9 +20,22 @@ class Q:
     OR = "OR"
 
     def __init__(self, **kwargs):
-        self.children = list(kwargs.items())
+        # Convert enum values before storing
+        converted_kwargs = self._convert_enum_kwargs(kwargs)
+        self.children = list(converted_kwargs.items())
         self.connector = self.AND
         self.negated = False
+
+    def _convert_enum_value(self, value):
+        """Convert enum instances to their values for database queries."""
+        import enum
+        if isinstance(value, enum.Enum):
+            return value.value
+        return value
+
+    def _convert_enum_kwargs(self, kwargs):
+        """Convert enum values in kwargs dictionary."""
+        return {key: self._convert_enum_value(value) for key, value in kwargs.items()}
 
     def _combine(self, other, conn):
         if not isinstance(other, Q):
@@ -117,12 +130,25 @@ class QuerySet(Generic[T]):
     def exclude(self, *args, **kwargs) -> 'QuerySet':
         return self._add_filters(args, kwargs, negated=True)
 
+    def _convert_enum_value(self, value):
+        """Convert enum instances to their values for database queries."""
+        import enum
+        if isinstance(value, enum.Enum):
+            return value.value
+        return value
+
+    def _convert_enum_kwargs(self, kwargs):
+        """Convert enum values in kwargs dictionary."""
+        return {key: self._convert_enum_value(value) for key, value in kwargs.items()}
+
     def _add_filters(self, args, kwargs, negated=False):
         qs = self._clone()
         q_objects = list(args)
 
         if kwargs:
-            q_objects.append(Q(**kwargs))
+            # Convert enum values before creating Q object
+            converted_kwargs = self._convert_enum_kwargs(kwargs)
+            q_objects.append(Q(**converted_kwargs))
 
         if not q_objects:
             return qs
