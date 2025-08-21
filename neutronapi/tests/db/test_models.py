@@ -139,3 +139,20 @@ class TestModels(unittest.IsolatedAsyncioTestCase):
         single_user = await TestUser.objects.filter(email='test@example.com').first()
         self.assertIsNotNone(single_user)
         self.assertEqual(single_user.name, 'Test User')
+
+    async def test_model_does_not_exist_exception(self):
+        """Test that Model.DoesNotExist exception is properly implemented."""
+        # Test that DoesNotExist is defined on the model class
+        self.assertTrue(hasattr(TestUser, 'DoesNotExist'))
+        self.assertTrue(issubclass(TestUser.DoesNotExist, Exception))
+        
+        # Test that DoesNotExist is raised when using get() with no results
+        with self.assertRaises(TestUser.DoesNotExist):
+            await TestUser.objects.get(name='nonexistent')
+        
+        # Test that different models have different DoesNotExist classes
+        class AnotherModel(Model):
+            name = CharField()
+        
+        self.assertNotEqual(TestUser.DoesNotExist, AnotherModel.DoesNotExist)
+        self.assertTrue(issubclass(AnotherModel.DoesNotExist, Exception))

@@ -539,16 +539,16 @@ class QuerySet:
         results = await qs.limit(2)._fetch_all()
 
         if not results:
-            raise ObjectDoesNotExist("Object does not exist")
+            raise self._model_class.DoesNotExist(f"{self._model_class.__name__} matching query does not exist.")
         elif len(results) > 1:
-            raise MultipleObjectsReturned("Multiple objects returned")
+            raise MultipleObjectsReturned(f"get() returned more than one {self._model_class.__name__} -- it returned {len(results)}!")
 
         return results[0]
 
     async def get_or_none(self, *args, **kwargs) -> Optional['Object']:
         try:
             return await self.get(*args, **kwargs)
-        except (ObjectDoesNotExist, MultipleObjectsReturned):
+        except (self._model_class.DoesNotExist, MultipleObjectsReturned):
             return None
 
     async def vector_search(self, query_vector, top_k: int = 10, **pre_filters):
@@ -909,8 +909,6 @@ class QuerySet:
         return Object(result_dict, self)
 
 
-class ObjectDoesNotExist(Exception):
-    pass
 
 
 class MultipleObjectsReturned(Exception):

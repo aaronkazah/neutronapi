@@ -57,6 +57,14 @@ class ModelBase(type):
 
 class Model(metaclass=ModelBase):
     _fields: Dict[str, BaseField]
+    DoesNotExist = None
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.DoesNotExist = type("DoesNotExist", (Exception,), {
+            '__module__': cls.__module__,
+            '__qualname__': f'{cls.__qualname__}.DoesNotExist'
+        })
 
     def __init__(self, **kwargs: Any):
         for name, field in self._fields.items():
