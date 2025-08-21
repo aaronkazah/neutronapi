@@ -62,7 +62,7 @@ class JSONParser(BaseParser):
         try:
             data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         except Exception:
-            from neutronapi import exceptions
+            from neutronapi.api import exceptions
             raise exceptions.ValidationError("Invalid JSON body")
         return {"body": data}
 
@@ -77,7 +77,7 @@ class FormParser(BaseParser):
             # Normalize single-item lists to strings
             data = {k: v[0] if isinstance(v, list) and len(v) == 1 else v for k, v in parsed.items()}
         except Exception:
-            from neutronapi import exceptions
+            from neutronapi.api import exceptions
             raise exceptions.ValidationError("Invalid form data")
         return {"body": data}
 
@@ -98,7 +98,7 @@ class MultiPartParser(BaseParser):
         try:
             form = cgi.FieldStorage(fp=fp, environ=environ, keep_blank_values=True)
         except Exception:
-            from neutronapi import exceptions
+            from neutronapi.api import exceptions
             raise exceptions.ValidationError("Invalid multipart form data")
 
         data: Dict[str, object] = {}

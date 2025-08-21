@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     pass
 from urllib.parse import parse_qs
 
-from neutronapi import exceptions
+from neutronapi.api import exceptions
 from neutronapi.encoders import CustomJSONEncoder
 from neutronapi.db.models import Model
 

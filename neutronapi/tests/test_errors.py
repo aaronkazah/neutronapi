@@ -81,7 +81,7 @@ class TestErrorShapes(unittest.IsolatedAsyncioTestCase):
                 # Expect header X-Auth: ok
                 headers = dict(scope.get("headers", []))
                 if headers.get(b"x-auth") != b"ok":
-                    from neutronapi import exceptions
+                    from neutronapi.api import exceptions
                     raise exceptions.AuthenticationFailed("Invalid token")
 
         app = Application(apis=[SecureAPI(authentication_class=SecureAPI())])

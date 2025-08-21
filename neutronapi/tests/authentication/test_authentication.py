@@ -2,7 +2,7 @@ import unittest
 
 from neutronapi.base import API
 from neutronapi.application import Application
-from neutronapi import exceptions
+from neutronapi.api import exceptions
 
 
 class DummyAuth:
@@ -50,4 +50,3 @@ class TestAuthenticationWorkflow(unittest.IsolatedAsyncioTestCase):
         scope2 = {**base_scope, "headers": [(b"x-auth", b"ok")]}
         messages = await call_asgi(app, scope2)
         self.assertEqual(messages[0]["status"], 200)
-

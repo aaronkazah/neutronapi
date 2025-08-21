@@ -379,7 +379,7 @@ class OrderAPI(API):
 ## Error Handling
 
 ```python
-from neutronapi.exceptions import ValidationError, NotFound, APIException
+from neutronapi.api.exceptions import ValidationError, NotFound, APIException
 
 @API.endpoint("/users/<int:user_id>", methods=["GET"])
 async def get_user(self, scope, receive, send, **kwargs):
@@ -400,6 +400,22 @@ class BusinessLogicError(APIException):
     
     def __init__(self, message: str = "Business logic error"):
         super().__init__(message, type="business_error")
+```
+
+### Exception Organization
+
+Exceptions are organized by module (like Django):
+
+```python
+# Module-specific exceptions
+from neutronapi.api.exceptions import APIException, ValidationError, NotFound
+from neutronapi.db.exceptions import DoesNotExist, MigrationError, IntegrityError
+from neutronapi.authentication.exceptions import AuthenticationFailed
+from neutronapi.middleware.exceptions import RouteNotFound, MethodNotAllowed
+from neutronapi.openapi.exceptions import InvalidSchemaError
+
+# Generic framework exceptions
+from neutronapi.exceptions import ImproperlyConfigured, ValidationError, ObjectDoesNotExist
 ```
 
 ## OpenAPI & Swagger Documentation

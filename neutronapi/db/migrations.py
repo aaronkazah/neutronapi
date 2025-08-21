@@ -892,8 +892,12 @@ HASH = {state_json}
 
     def _build_state_from_migrations(self, app_label: str) -> Dict:
         """
-        Build current state from existing migrations by loading the HASH
-        from the *latest* numbered migration file for the app.
+        Build current state from existing migrations.
+        
+        This method checks for gaps in migration files and returns empty state
+        if any are detected, forcing regeneration of missing migrations.
+        
+        If no gaps are detected, it loads the HASH from the latest migration file.
         """
         state = {}
         migrations_dir = self.get_migrations_dir(app_label)
@@ -916,67 +920,119 @@ HASH = {state_json}
             key=lambda x: int(x.split("_")[0]),
         )
 
-        if migration_files:
-            last_migration_file = migration_files[-1]
-            module_path = Path(migrations_dir) / last_migration_file
-            module_name = f"{app_label}.migrations.{module_path.stem}"
-
-            # Add the base directory to sys.path temporarily if needed
-            path_added = False
-            if self.base_dir not in sys.path:
-                sys.path.insert(0, self.base_dir)
-                path_added = True
-
-            try:
-                # Invalidate caches to ensure we load the latest version
-                importlib.invalidate_caches()
-                # Ensure the specific module is removed if it was loaded before
-                if module_name in sys.modules:
-                    del sys.modules[module_name]
-
-                # Load the module using spec_from_file_location for reliability
-                spec = importlib.util.spec_from_file_location(module_name, module_path)
-                if spec and spec.loader:
-                    migration_module = importlib.util.module_from_spec(spec)
-                    sys.modules[module_name] = (
-                        migration_module  # Add to sys.modules before execution
-                    )
-                    spec.loader.exec_module(migration_module)
-
-                    # Get the HASH dictionary directly from the module
-                    if hasattr(migration_module, "HASH") and isinstance(
-                        migration_module.HASH, dict
-                    ):
-                        state = migration_module.HASH
-                    else:
-                        print(
-                            f"Warning: No valid HASH dictionary found in {module_name}. Using empty state."
-                        )
-                else:
-                    print(f"Error: Could not create module spec for {module_path}")
-
-            except Exception as e:
-                print(f"Error loading migration state from {module_name}: {str(e)}")
-                # Print the traceback for debugging
-                traceback.print_exc()
-                # Decide on behavior: return empty state or raise error?
-                # Returning empty state might lead to incorrect migrations. Raising is safer.
-                raise RuntimeError(
-                    f"Failed to load state from migration {module_name}. Cannot proceed."
-                ) from e
-
-            finally:
-                # Clean up sys.path
-                if path_added and self.base_dir in sys.path:
-                    sys.path.remove(self.base_dir)
-                # Attempt to remove the loaded module to prevent side effects, though it might be tricky
-                # if module_name in sys.modules:
-                #      del sys.modules[module_name]
-
-        else:
+        if not migration_files:
             print(
                 f"No numbered migration files found in {migrations_dir}. Starting with empty state."
             )
+            return state
+
+        # Check for gaps in migration sequence
+        migration_numbers = [int(f.split("_")[0]) for f in migration_files]
+        expected_sequence = list(range(1, max(migration_numbers) + 1))
+        
+        if migration_numbers != expected_sequence:
+            missing_numbers = [n for n in expected_sequence if n not in migration_numbers]
+            
+            # Try to load state from latest migration first
+            last_migration_file = migration_files[-1]
+            module_path = Path(migrations_dir) / last_migration_file
+            module_name = f"{app_label}.migrations.{module_path.stem}"
+            
+            # Check if latest migration contains all current models
+            try:
+                # Add base_dir to path temporarily
+                path_added = False
+                if self.base_dir not in sys.path:
+                    sys.path.insert(0, self.base_dir)
+                    path_added = True
+                    
+                # Load the latest migration's HASH
+                importlib.invalidate_caches()
+                if module_name in sys.modules:
+                    del sys.modules[module_name]
+                    
+                spec = importlib.util.spec_from_file_location(module_name, module_path)
+                if spec and spec.loader:
+                    migration_module = importlib.util.module_from_spec(spec)
+                    sys.modules[module_name] = migration_module
+                    spec.loader.exec_module(migration_module)
+                    
+                    if hasattr(migration_module, "HASH") and isinstance(migration_module.HASH, dict):
+                        # If latest migration has complete state, use it (gaps are ok)
+                        print(
+                            f"Missing migration files detected for {app_label}: "
+                            f"{[str(n).zfill(4) + '_*.py' for n in missing_numbers]}. "
+                            f"Using state from latest migration {last_migration_file}."
+                        )
+                        return migration_module.HASH
+                        
+            except Exception:
+                pass  # Fall through to empty state
+            finally:
+                if path_added and self.base_dir in sys.path:
+                    sys.path.remove(self.base_dir)
+                    
+            # If we can't load latest migration state, return empty to regenerate
+            print(
+                f"Missing migration files detected for {app_label}: "
+                f"{[str(n).zfill(4) + '_*.py' for n in missing_numbers]}. "
+                f"Starting with empty state to regenerate missing migrations."
+            )
+            return {}
+
+        # No gaps detected - load state from latest migration
+        last_migration_file = migration_files[-1]
+        module_path = Path(migrations_dir) / last_migration_file
+        module_name = f"{app_label}.migrations.{module_path.stem}"
+
+        # Add the base directory to sys.path temporarily if needed
+        path_added = False
+        if self.base_dir not in sys.path:
+            sys.path.insert(0, self.base_dir)
+            path_added = True
+
+        try:
+            # Invalidate caches to ensure we load the latest version
+            importlib.invalidate_caches()
+            # Ensure the specific module is removed if it was loaded before
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+
+            # Load the module using spec_from_file_location for reliability
+            spec = importlib.util.spec_from_file_location(module_name, module_path)
+            if spec and spec.loader:
+                migration_module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = (
+                    migration_module  # Add to sys.modules before execution
+                )
+                spec.loader.exec_module(migration_module)
+
+                # Get the HASH dictionary directly from the module
+                if hasattr(migration_module, "HASH") and isinstance(
+                    migration_module.HASH, dict
+                ):
+                    state = migration_module.HASH
+                else:
+                    print(
+                        f"Warning: No valid HASH dictionary found in {module_name}. Using empty state."
+                    )
+            else:
+                print(f"Error: Could not create module spec for {module_path}")
+
+        except Exception as e:
+            print(f"Error loading migration state from {module_name}: {str(e)}")
+            # Print the traceback for debugging
+            traceback.print_exc()
+            # Decide on behavior: return empty state or raise error?
+            # Returning empty state might lead to incorrect migrations. Raising is safer.
+            raise RuntimeError(
+                f"Failed to load state from migration {module_name}. Cannot proceed."
+            ) from e
+
+        finally:
+            # Clean up sys.path
+            if path_added and self.base_dir in sys.path:
+                sys.path.remove(self.base_dir)
 
         return state
 
