@@ -6,7 +6,7 @@ This provides compatibility for imports like:
 """
 from __future__ import annotations
 
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
 import inspect
 import datetime
 from .connection import get_databases, DatabaseType
@@ -38,11 +38,16 @@ class ModelBase(type):
                 setattr(field, '_name', fname)
 
         cls._fields = fields
+        
+        # Set objects as a class attribute for better IDE support
+        cls.objects = cls._Manager(cls)
+        
         return cls
 
 
 class Model(metaclass=ModelBase):
     _fields: Dict[str, BaseField]
+    objects: '_Manager'  # Set by metaclass, here for type hints
 
     def __init__(self, **kwargs: Any):
         for name, field in self._fields.items():
@@ -130,18 +135,15 @@ class Model(metaclass=ModelBase):
         await db.commit()
 
     class _Manager:
-        def __init__(self, model_cls):
+        def __init__(self, model_cls: type['Model']):
             self.model_cls = model_cls
 
-        async def create(self, **kwargs):
+        async def create(self, **kwargs: Any) -> 'Model':
             obj = self.model_cls(**kwargs)
             await obj.save(create=True)
             return obj
 
     @classmethod
-    def _get_manager(cls):
+    def _get_manager(cls) -> '_Manager':
         return cls._Manager(cls)
 
-    @classmethod
-    def objects(cls):  # type: ignore
-        return cls._get_manager()

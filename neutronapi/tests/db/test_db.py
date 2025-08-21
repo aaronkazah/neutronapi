@@ -12,7 +12,6 @@ from neutronapi.db.models import Model
 from neutronapi.db.fields import CharField, IntegerField, DateTimeField, JSONField, BooleanField
 from neutronapi.db.migrations import MigrationManager, CreateModel
 
-
 class SampleModel(Model):
     """Test model for database operations."""
     name = CharField(max_length=100)
@@ -233,6 +232,7 @@ class TestMigrations(unittest.TestCase):
         
         # Test description
         description = operation.describe()
+
         assert 'CreateModel' in description
         assert 'testapp.TestModel' in description
 
