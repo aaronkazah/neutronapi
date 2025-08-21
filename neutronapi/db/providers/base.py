@@ -28,6 +28,16 @@ class BaseProvider(ABC):
     @abstractmethod
     async def fetchall(self, query: str, params: Tuple = ()) -> List[Dict[str, Any]]:
         pass
+    
+    @abstractmethod
+    def get_placeholder(self, index: int = 1) -> str:
+        """Get parameter placeholder for this database dialect."""
+        pass
+    
+    @abstractmethod
+    def get_placeholders(self, count: int) -> str:
+        """Get multiple parameter placeholders for this database dialect."""
+        pass
 
     @abstractmethod
     async def create_tables(self):

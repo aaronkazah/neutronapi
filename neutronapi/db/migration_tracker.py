@@ -186,14 +186,13 @@ class MigrationTracker:
         """Get all applied migrations from the database."""
         await self.ensure_migration_table(connection)
         
-        cursor = await connection.execute(
+        rows = await connection.fetch_all(
             f"SELECT app_label, migration_name FROM {self.MIGRATION_TABLE}"
         )
-        rows = await cursor.fetchall()
         
         applied = {}
         for row in rows:
-            app_label, migration_name = row
+            app_label, migration_name = row['app_label'], row['migration_name']
             if app_label not in applied:
                 applied[app_label] = set()
             applied[app_label].add(migration_name)
@@ -202,25 +201,37 @@ class MigrationTracker:
     
     async def get_migration_record(self, connection, app_label: str, migration_name: str) -> Optional[MigrationRecord]:
         """Get a specific migration record from the database."""
-        cursor = await connection.execute(
-            f"SELECT app_label, migration_name, file_hash, applied_at FROM {self.MIGRATION_TABLE} "
-            f"WHERE app_label = ? AND migration_name = ?",
-            (app_label, migration_name)
-        )
-        row = await cursor.fetchone()
+        # Use proper placeholder syntax based on database type
+        if hasattr(connection, 'db_type') and connection.db_type == DatabaseType.POSTGRES:
+            query = f"SELECT app_label, migration_name, file_hash, applied_at FROM {self.MIGRATION_TABLE} WHERE app_label = $1 AND migration_name = $2"
+        else:
+            query = f"SELECT app_label, migration_name, file_hash, applied_at FROM {self.MIGRATION_TABLE} WHERE app_label = ? AND migration_name = ?"
+        
+        row = await connection.fetch_one(query, (app_label, migration_name))
         
         if row:
-            return MigrationRecord(*row)
+            return MigrationRecord(row['app_label'], row['migration_name'], row['file_hash'], row['applied_at'])
         return None
     
     async def mark_migration_applied(self, connection, migration_file: MigrationFile) -> None:
         """Mark a migration as applied in the database."""
-        await connection.execute(
-            f"INSERT OR REPLACE INTO {self.MIGRATION_TABLE} "
-            f"(app_label, migration_name, file_hash) VALUES (?, ?, ?)",
-            (migration_file.app_label, migration_file.migration_name, migration_file.file_hash)
-        )
-        await connection.commit()
+        # Use proper upsert syntax based on database type
+        if hasattr(connection, 'db_type') and connection.db_type == DatabaseType.POSTGRES:
+            query = f"""
+                INSERT INTO {self.MIGRATION_TABLE} (app_label, migration_name, file_hash) 
+                VALUES ($1, $2, $3)
+                ON CONFLICT (app_label, migration_name) 
+                DO UPDATE SET file_hash = $3
+            """
+        else:
+            query = f"""
+                INSERT OR REPLACE INTO {self.MIGRATION_TABLE} 
+                (app_label, migration_name, file_hash) VALUES (?, ?, ?)
+            """
+        
+        await connection.execute(query, (migration_file.app_label, migration_file.migration_name, migration_file.file_hash))
+        if hasattr(connection, 'commit'):
+            await connection.commit()
     
     async def get_unapplied_migrations(self, connection) -> List[MigrationFile]:
         """
@@ -266,13 +277,16 @@ class MigrationTracker:
                 # Get database provider from the active connection
                 provider = connection.provider
                 await migration.apply(None, provider, connection)
-            
-            # Mark as applied
-            await self.mark_migration_applied(connection, migration_file)
-            print(f"✓ Applied {migration_file.app_label}.{migration_file.migration_name}")
+                
+                # Only mark as applied if migration succeeded without exception
+                await self.mark_migration_applied(connection, migration_file)
+                print(f"✓ Applied {migration_file.app_label}.{migration_file.migration_name}")
+            else:
+                raise ValueError(f"No migration found in {migration_file.migration_name}")
             
         except Exception as e:
             print(f"✗ Failed to apply {migration_file.app_label}.{migration_file.migration_name}: {e}")
+            # Don't mark as applied if it failed
             raise
     
     async def migrate(self, connection) -> None:

@@ -30,6 +30,45 @@ class Command:
 
         All options can be overridden. Supports all uvicorn options.
         """
+        # Fast-path help: avoid any async DB checks or external calls
+        if any(a in ("--help", "-h", "help") for a in args):
+            print(self.handle.__doc__)
+            # Keep help lightweight; avoid spawning uvicorn
+            print("\nTip: install 'uvicorn' to see all runtime options (uvicorn --help).")
+            return
+        # Preflight: warn about unapplied migrations (like Django)
+        try:
+            import asyncio
+            import signal
+            from neutronapi.db.migration_tracker import MigrationTracker
+            from neutronapi.db.connection import get_databases
+
+            async def _check_unapplied():
+                base_dir = os.path.join(os.getcwd(), 'apps')
+                if not os.path.isdir(base_dir):
+                    return
+                tracker = MigrationTracker(base_dir='apps')
+                connection = await get_databases().get_connection('default')
+                unapplied = await tracker.get_unapplied_migrations(connection)
+                if unapplied:
+                    print("\nWarning: You have unapplied migrations.")
+                    print("Run 'python manage.py migrate' to apply them before starting the server.\n")
+
+            # Run check with timeout to prevent hanging
+            try:
+                # Set a 3 second timeout for migration check
+                asyncio.run(asyncio.wait_for(_check_unapplied(), timeout=3.0))
+            except (RuntimeError, asyncio.TimeoutError):
+                # Event loop already running or timeout - try alternative approach
+                try:
+                    loop = asyncio.get_event_loop()
+                    loop.run_until_complete(asyncio.wait_for(_check_unapplied(), timeout=3.0))
+                except (asyncio.TimeoutError, Exception):
+                    # Migration check timed out or failed - continue anyway
+                    pass
+        except Exception:
+            # Never block startup for migration warnings
+            pass
 
         try:
             import uvicorn
@@ -93,9 +132,9 @@ class Command:
             arg = args[i]
 
             if arg == "--help":
+                # Already handled at top; keep for completeness
                 print(self.handle.__doc__)
-                print("\nUvicorn options:")
-                os.system("uvicorn --help")
+                print("\nTip: install 'uvicorn' to see all runtime options (uvicorn --help).")
                 return
             elif arg == "--host":
                 if i + 1 < len(args):

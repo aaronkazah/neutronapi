@@ -300,17 +300,15 @@ class QuerySet:
 
     _json_fields = set()
 
-    def __init__(self, database, table: str, json_fields=None, model=None):
-        if hasattr(database, 'provider'):
-            self.db = database
-            self.provider = database.provider
-        else:
-            self.provider = database
-            self.db = None
-        if not table:
-            raise ValueError("table must be provided for QuerySet")
-        self.table = table
-        self.model = model
+    def __init__(self, model_cls):
+        # Simple constructor that takes a Model class, like the old working code
+        self.model = model_cls
+        self.table = model_cls.get_table_name()
+        self._model_class = model_cls
+        
+        # Database access is deferred until needed
+        self.db = None
+        self.provider = None
         self._filters = []
         self._order_by = []
         self._limit_count = None
@@ -320,19 +318,40 @@ class QuerySet:
         self._values_fields = []
         self._values_flat = False
         self._result_cache = None
-        self._is_sqlite = 'sqlite' in self.provider.__class__.__name__.lower()
-        # Derive JSON fields from model if provided and not explicitly set
+        
+        # Will be determined when we get the provider
+        self._is_sqlite = None
+        
+        # Derive JSON fields from the model
         derived_json = set()
-        if model is not None and hasattr(model, '_fields'):
+        if hasattr(model_cls, '_fields'):
             try:
                 from .fields import JSONField
-                for fname, f in model._fields.items():
+                for fname, f in model_cls._fields.items():
                     if isinstance(f, JSONField):
                         derived_json.add(fname)
             except Exception:
                 pass
-        # Allow per-instance JSON fields list; derive from model when not provided
-        self._json_fields = set(json_fields or derived_json)
+        self._json_fields = derived_json
+    
+    async def _get_provider(self):
+        """Get and cache the database provider, and initialize dialect flags."""
+        if hasattr(self, '_model_class'):
+            from .connection import get_databases
+            db_manager = get_databases()
+            connection = await db_manager.get_connection()
+            provider = connection.provider
+            # Cache provider for subsequent non-query-building paths (update/delete)
+            self.provider = provider
+            # Initialize dialect flag before any SQL construction
+            if self._is_sqlite is None:
+                self._is_sqlite = 'sqlite' in provider.__class__.__name__.lower()
+            return provider
+        else:
+            # If provider already set externally, ensure dialect flag is set
+            if self.provider and self._is_sqlite is None:
+                self._is_sqlite = 'sqlite' in self.provider.__class__.__name__.lower()
+            return self.provider
 
     def filter(self, *args, **kwargs) -> 'QuerySet':
         return self._add_filters(args, kwargs, negated=False)
@@ -408,8 +427,10 @@ class QuerySet:
         return self._result_cache
 
     async def _fetch_all(self) -> List[Union['Object', Dict, Any]]:
+        # Ensure provider/dialect is initialized before constructing SQL
+        provider = await self._get_provider()
         sql, params = self._build_query()
-        results = await self.provider.fetchall(sql, tuple(params))
+        results = await provider.fetchall(sql, tuple(params))
 
         if not self._values_mode:
             return [self._deserialize_result(result) for result in results if result]
@@ -473,8 +494,10 @@ class QuerySet:
         qs._limit_count = None
         qs._offset_count = None
 
+        # Ensure provider/dialect is initialized before constructing SQL
+        provider = await self._get_provider()
         sql, params = qs._build_query()
-        result = await self.provider.fetchone(sql, tuple(params))
+        result = await provider.fetchone(sql, tuple(params))
 
         if result:
             return list(result.values())[0] if isinstance(result, dict) else result[0]
@@ -529,6 +552,8 @@ class QuerySet:
         return await vs.vector_search(query_vector, top_k, **pre_filters)
 
     async def delete(self) -> int:
+        # Ensure provider/dialect is initialized before constructing SQL
+        provider = await self._get_provider()
         where_clause, params = self._build_where_clause()
 
         if not where_clause:
@@ -538,73 +563,26 @@ class QuerySet:
         else:
             sql = f"DELETE FROM {self.table} WHERE {where_clause}"
 
-        await self.provider.execute(sql, tuple(params))
+        await provider.execute(sql, tuple(params))
         return 1
 
-    async def create(self, key: str, text: str = None, **kwargs) -> 'Object':
-        """Create an object row. Works with either a Database or raw provider.
+    async def create(self, **kwargs):
+        """Create a new record in the database by instantiating and saving the model."""
+        # Convert any Enum values
+        converted_kwargs = self._convert_enum_values(kwargs)
+        instance = self._model_class(**converted_kwargs)
+        await instance.save(create=True)
+        return instance
 
-        - When initialized with a Database (self.db), delegate to db.create.
-        - When initialized with a provider only, perform a direct INSERT into the
-          backing table (defaults to 'objects') with correct placeholders.
-        """
-        # Build and validate object data
-        temp_data = {'key': key, **kwargs}
-        if text is not None:
-            temp_data['text'] = text
-        temp_obj = Object(temp_data, self)
-        await temp_obj.validate()
-
-        if self.db:
-            # Serialize datetime objects before delegating
-            for k, v in kwargs.items():
-                if isinstance(v, datetime.datetime):
-                    kwargs[k] = v.isoformat()
-            obj_dict = await self.db.create(key, **kwargs)
-            return self._deserialize_result(obj_dict)
-
-        # Provider-backed path
-        # Ensure id exists
-        import uuid
-        if 'id' not in temp_data or not temp_data['id']:
-            temp_data['id'] = f"obj-{uuid.uuid4()}"
-
-        # Auto-timestamps (use datetime for Postgres, ISO for SQLite)
-        now_dt = datetime.datetime.now(tz=datetime.timezone.utc)
-        if self._is_sqlite:
-            now_val_created = now_dt.isoformat()
-            now_val_modified = now_dt.isoformat()
-        else:
-            now_val_created = now_dt
-            now_val_modified = now_dt
-        temp_data.setdefault('created', now_val_created)
-        temp_data.setdefault('modified', now_val_modified)
-
-        # Serialize JSON-like fields
-        for json_field in ('meta', 'store', 'connections'):
-            if json_field in temp_data and isinstance(temp_data[json_field], (dict, list)):
-                temp_data[json_field] = self.provider.serialize(temp_data[json_field])
-
-        # Prepare fields and params
-        fields = list(temp_data.keys())
-        values = [temp_data[f] for f in fields]
-
-        # Placeholders by dialect
-        if self._is_sqlite:
-            placeholders = ', '.join(['?'] * len(fields))
-        else:
-            placeholders = ', '.join([f'${i+1}' for i in range(len(fields))])
-
-        columns = ', '.join(fields)
-        sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders})"
-        await self.provider.execute(sql, tuple(values))
-        return self._deserialize_result(temp_data)
 
     async def update(self, **kwargs) -> int:
         if not kwargs:
             return 0
 
         kwargs['modified'] = datetime.datetime.now(tz=datetime.timezone.utc)
+
+        # Ensure provider/dialect is initialized before constructing SQL
+        provider = await self._get_provider()
 
         set_clauses = []
         set_params = []
@@ -628,11 +606,21 @@ class QuerySet:
         sql = f"UPDATE {self.table} SET {', '.join(set_clauses)} WHERE {where_clause}"
         params = set_params + where_params
 
-        await self.provider.execute(sql, tuple(params))
+        await provider.execute(sql, tuple(params))
         return 1
 
+    def _convert_enum_values(self, data: dict) -> dict:
+        """Convert any Enum values in a dict to their string values."""
+        converted = {}
+        for key, value in data.items():
+            if hasattr(value, 'value'):  # Enum-like object
+                converted[key] = value.value
+            else:
+                converted[key] = value
+        return converted
+
     def _clone(self) -> 'QuerySet':
-        qs = QuerySet(self.db or self.provider, self.table, json_fields=self._json_fields)
+        qs = QuerySet(self._model_class)
         qs._filters = self._filters.copy()
         qs._order_by = self._order_by.copy()
         qs._limit_count = self._limit_count

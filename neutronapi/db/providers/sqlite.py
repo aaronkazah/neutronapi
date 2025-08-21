@@ -448,3 +448,11 @@ class SQLiteProvider(BaseProvider):
         if field_cls is CharField and potential_args.get("max_length") is not None:
             init_args["max_length"] = potential_args["max_length"]
         return field_cls(**init_args)
+    
+    def get_placeholder(self, index: int = 1) -> str:
+        """SQLite uses ? placeholders."""
+        return "?"
+    
+    def get_placeholders(self, count: int) -> str:
+        """Get multiple ? placeholders for SQLite."""
+        return ", ".join(["?"] * count)

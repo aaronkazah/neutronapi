@@ -6,7 +6,7 @@ import os
 import sys
 import unittest
 import asyncio
-from typing import List
+from typing import List, Optional, Tuple
 
 
 class Command:
@@ -58,11 +58,25 @@ class Command:
             }
             setup_databases(test_config)
 
-    def _bootstrap_postgres(self):
-        # Start a disposable PostgreSQL in Docker if available
-        import os
+    async def _run_async(self, *cmd: str, timeout: Optional[float] = None) -> Tuple[int, str, str]:
+        """Run a subprocess asynchronously and capture output."""
+        import asyncio
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            raise
+        return proc.returncode, stdout.decode(), stderr.decode()
+
+    async def _bootstrap_postgres(self):
+        # Start a disposable PostgreSQL in Docker if available (async)
         import shutil
-        import subprocess
 
         self._pg_container = None
         host = os.getenv('PGHOST', '127.0.0.1')
@@ -79,36 +93,46 @@ class Command:
 
         try:
             # Check if docker daemon is running
-            check = subprocess.run([docker, 'info'], capture_output=True, text=True)
-            if check.returncode != 0:
+            code, _, _ = await self._run_async(docker, 'info', timeout=5)
+            if code != 0:
                 print('Docker daemon not running, cannot bootstrap PostgreSQL')
+                return False
+
+            # Ensure the required image exists locally to avoid a network pull
+            image = 'postgres:15-alpine'
+            code, _, _ = await self._run_async(docker, 'image', 'inspect', image, timeout=5)
+            if code != 0:
+                print(f"Docker image '{image}' not present locally; skipping PostgreSQL bootstrap (no network pulls)")
                 return False
 
             # Check if a container with our name exists; if not, run one
             name = 'neutronapi_test_pg'
-            ps = subprocess.run([docker, 'ps', '-q', '-f', f'name={name}'], capture_output=True, text=True)
+            code, out, _ = await self._run_async(docker, 'ps', '-q', '-f', f'name={name}', timeout=5)
 
-            if not ps.stdout.strip():
+            if not out.strip():
                 print(f'Starting PostgreSQL container on port {port}...')
-                run = subprocess.run([
+                code, _, err = await self._run_async(
                     docker, 'run', '-d', '--rm', '--name', name,
                     '-e', f'POSTGRES_PASSWORD={password}',
                     '-e', f'POSTGRES_DB={dbname}',
                     '-e', f'POSTGRES_USER={user}',
                     '-p', f'{port}:5432',
-                    'postgres:15-alpine'
-                ], capture_output=True, text=True)
-
-                if run.returncode == 0:
+                    image,
+                    timeout=20,
+                )
+                if code == 0:
                     self._pg_container = name
                     print(f'PostgreSQL container started: {name}')
                 else:
-                    print(f'Failed to start PostgreSQL container: {run.stderr.strip()}')
+                    print(f'Failed to start PostgreSQL container: {err.strip()}')
                     return False
             else:
                 self._pg_container = name
                 print(f'Using existing PostgreSQL container: {name}')
 
+        except asyncio.TimeoutError:
+            print('Docker command timed out during PostgreSQL bootstrap')
+            return False
         except Exception as e:
             print(f"Error with Docker: {e}")
             return False
@@ -116,7 +140,6 @@ class Command:
         # Wait for PostgreSQL to be ready
         print('Waiting for PostgreSQL to be ready...')
         try:
-            import asyncio
             import asyncpg
 
             async def _wait_ready():
@@ -133,7 +156,7 @@ class Command:
                         await asyncio.sleep(0.25)
                 return False
 
-            ready = asyncio.run(_wait_ready())
+            ready = await _wait_ready()
             if not ready:
                 print('PostgreSQL failed to become ready in time')
                 return False
@@ -172,15 +195,14 @@ class Command:
             print(f"Error configuring PostgreSQL: {e}")
             return False
 
-    def _teardown_postgres(self):
+    async def _teardown_postgres(self):
         # Stop the disposable postgres container if we started it
         import shutil
-        import subprocess
         if getattr(self, '_pg_container', None):
             docker = shutil.which('docker')
             if docker:
                 try:
-                    subprocess.run([docker, 'stop', self._pg_container], capture_output=True)
+                    await self._run_async(docker, 'stop', self._pg_container, timeout=10)
                 except Exception:
                     pass
 
@@ -212,13 +234,92 @@ class Command:
         provider_env = os.getenv('DATABASE_PROVIDER', '').lower().strip()
         if provider_env in ('asyncpg', 'postgres', 'postgresql'):
             print('Bootstrapping PostgreSQL test database...')
-            success = self._bootstrap_postgres()
+            try:
+                success = asyncio.run(self._bootstrap_postgres())
+            except Exception:
+                success = False
             if not success:
                 print('Failed to bootstrap PostgreSQL, falling back to SQLite')
                 self._bootstrap_sqlite()
         else:
             print('Bootstrapping SQLite in-memory test database...')
             self._bootstrap_sqlite()
+
+        # Apply project migrations (if any) using the file-based tracker
+        async def apply_project_migrations():
+            try:
+                base_dir = os.path.join(os.getcwd(), 'apps')
+                if not os.path.isdir(base_dir):
+                    return
+                # Quick check: any migrations directory with numbered files?
+                found_any = False
+                for app_name in os.listdir(base_dir):
+                    mig_dir = os.path.join(base_dir, app_name, 'migrations')
+                    if os.path.isdir(mig_dir):
+                        for fn in os.listdir(mig_dir):
+                            if fn.endswith('.py') and fn[:3].isdigit():
+                                found_any = True
+                                break
+                    if found_any:
+                        break
+                if not found_any:
+                    return
+
+                from neutronapi.db.migration_tracker import MigrationTracker
+                from neutronapi.db.connection import get_databases
+                tracker = MigrationTracker(base_dir='apps')
+                connection = await get_databases().get_connection('default')
+                await tracker.migrate(connection)
+                print('✓ Applied project migrations for tests')
+            except Exception as e:
+                print(f"Warning: Failed to apply project migrations: {e}")
+
+        try:
+            asyncio.run(apply_project_migrations())
+        except Exception:
+            pass
+
+        # Bootstrap internal test models (used by this package's own tests)
+        async def bootstrap_test_models():
+            try:
+                from neutronapi.db.migrations import CreateModel
+                from neutronapi.db.connection import get_databases
+                
+                # Try to discover test models from neutronapi.tests.db
+                try:
+                    from neutronapi.tests.db.test_models import TestUser
+                    from neutronapi.tests.db.test_queryset import TestObject
+                    
+                    test_models = [TestUser, TestObject]
+                    
+                    # Create tables for test models using migrations
+                    connection = await get_databases().get_connection('default')
+                    
+                    for model_cls in test_models:
+                        create_operation = CreateModel(f'neutronapi.{model_cls.__name__}', model_cls._fields)
+                        await create_operation.database_forwards(
+                            app_label='neutronapi',
+                            provider=connection.provider,
+                            from_state=None,
+                            to_state=None,
+                            connection=connection
+                        )
+                    
+                    print(f"✓ Bootstrapped {len(test_models)} internal test models")
+                    
+                except ImportError as e:
+                    print(f"Note: Test models not found, skipping bootstrap: {e}")
+                except Exception as e:
+                    print(f"Warning: Failed to bootstrap test models: {e}")
+                    
+            except Exception as e:
+                print(f"Warning: Could not bootstrap test models: {e}")
+        
+        # Run the bootstrap
+        try:
+            asyncio.run(bootstrap_test_models())
+        except Exception as e:
+            print(f"Error during test model bootstrap: {e}")
 
         print("Running tests...")
 
@@ -340,7 +441,7 @@ class Command:
             self.run_forced_shutdown()
             # Best-effort: stop ephemeral postgres if we started it
             try:
-                self._teardown_postgres()
+                asyncio.run(self._teardown_postgres())
             except Exception:
                 pass
             # Hard-exit to avoid hanging event loops/threads

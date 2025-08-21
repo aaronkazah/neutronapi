@@ -71,18 +71,36 @@ class Model(metaclass=ModelBase):
         module = inspect.getmodule(cls)
         if not module:
             raise ValueError(f"Could not determine module for {cls.__name__}")
+
         module_path = module.__name__
         file_path = getattr(module, '__file__', '') or ''
-        if 'apps/' in file_path:
-            parts = file_path.split('apps/')
+
+        # 1) If located under an apps/ directory, use that app folder name
+        if 'apps/' in file_path or 'apps\\' in file_path:
+            sep = '/' if 'apps/' in file_path else '\\'
+            parts = file_path.split(f'apps{sep}')
             if len(parts) > 1:
-                return parts[1].split('/')[0]
+                return parts[1].split(sep)[0]
+
+        # 2) If the module path includes an 'apps' package, use the next segment
         parts = module_path.split('.')
         if 'apps' in parts:
             idx = parts.index('apps')
             if len(parts) > idx + 1:
                 return parts[idx + 1]
-        # Fallback to top-level module
+
+        # 3) Heuristic for tests: if file path contains a tests/ directory,
+        #    use the parent directory name as the app label (project package)
+        if file_path:
+            import os
+            norm = file_path.replace('\\', '/')
+            segments = [s for s in norm.split('/') if s]
+            if 'tests' in segments:
+                t_idx = segments.index('tests')
+                if t_idx > 0:
+                    return segments[t_idx - 1]
+
+        # 4) Fallback to the top-level module name
         return parts[0]
 
     @classmethod
@@ -123,6 +141,11 @@ class Model(metaclass=ModelBase):
                 val = field.default() if callable(field.default) else field.default
             if isinstance(val, datetime.datetime) and not is_pg:
                 val = val.isoformat()
+            # Serialize JSON fields
+            if hasattr(field, '__class__') and 'JSONField' in field.__class__.__name__:
+                if isinstance(val, (dict, list)):
+                    import json
+                    val = json.dumps(val)
             cols.append(self._quote(db_col))
             vals.append(val)
 
@@ -138,10 +161,7 @@ class Model(metaclass=ModelBase):
     @classproperty
     def objects(cls) -> QuerySet:
         """Return a QuerySet bound to the model's table."""
-        from .connection import get_databases
-        db = get_databases()  # This should return the database manager
-        table_name = cls.get_table_name()
-        return QuerySet(db, table_name, model=cls)
+        return QuerySet(cls)
 
     class _Manager:
         def __init__(self, model_cls: type['Model']):
@@ -155,4 +175,3 @@ class Model(metaclass=ModelBase):
     @classmethod
     def _get_manager(cls) -> '_Manager':
         return cls._Manager(cls)
-

@@ -1,61 +1,136 @@
+import os
+import tempfile
 import unittest
-
 from neutronapi.db import Model
-from neutronapi.db.fields import CharField, JSONField, DateTimeField
+from neutronapi.db.fields import CharField, JSONField
+from neutronapi.db.connection import setup_databases
 
 
-class TestModel(Model):
-    """Test model for testing Model functionality."""
+class TestUser(Model):
+    """Test model for database operations."""
     name = CharField(null=False)
-    email = CharField(null=False, unique=True)
+    email = CharField(null=False, unique=True)  
     data = JSONField(null=True, default=dict)
 
 
 class TestModels(unittest.IsolatedAsyncioTestCase):
-    """Test cases for Model functionality."""
-
-    async def test_model_objects_attribute(self):
-        """Test that Model.objects exists and has required methods."""
-        # Test that objects attribute exists
-        self.assertTrue(hasattr(TestModel, 'objects'))
+    """Test cases for Model functionality with actual database operations."""
+    
+    async def asyncSetUp(self):
+        """Set up test database before each test."""
+        # Create temporary SQLite database for testing
+        self.temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
+        self.temp_db.close()
         
-        # Test that objects has the all() method
-        self.assertTrue(hasattr(TestModel.objects, 'all'))
+        # Setup database configuration
+        db_config = {
+            'default': {
+                'ENGINE': 'aiosqlite',
+                'NAME': self.temp_db.name,
+            }
+        }
+        self.db_manager = setup_databases(db_config)
         
-        # Test that objects has other essential methods
-        self.assertTrue(hasattr(TestModel.objects, 'filter'))
-        self.assertTrue(hasattr(TestModel.objects, 'create'))
-        self.assertTrue(hasattr(TestModel.objects, 'get'))
+        # Create the table using migration system
+        from neutronapi.db.migrations import CreateModel
+        connection = await self.db_manager.get_connection()
+        
+        # Create table for TestUser model using migrations
+        create_operation = CreateModel('neutronapi.TestUser', TestUser._fields)
+        await create_operation.database_forwards(
+            app_label='neutronapi',
+            provider=connection.provider, 
+            from_state=None,
+            to_state=None,
+            connection=connection
+        )
 
-    async def test_model_objects_all_method(self):
-        """Test that Model.objects.all() can be called without error."""
+    async def asyncTearDown(self):
+        """Clean up after each test."""
+        await self.db_manager.close_all()
+        # Remove temp database file
         try:
-            # This should not raise AttributeError: '_Manager' object has no attribute 'all'
-            result = await TestModel.objects.all()
-            # Result should be a list (even if empty)
-            self.assertIsInstance(result, list)
-        except AttributeError as e:
-            if "'_Manager' object has no attribute 'all'" in str(e):
-                self.fail("Model.objects.all() failed with _Manager error - this is the bug we're fixing")
-            else:
-                # Some other AttributeError might be expected if DB isn't set up
-                pass
-
-    async def test_model_objects_filter_method(self):
-        """Test that Model.objects.filter() can be called without error."""
-        try:
-            # This should return a QuerySet
-            result = TestModel.objects.filter(name="test")
-            # Should have QuerySet methods
-            self.assertTrue(hasattr(result, 'all'))
-            self.assertTrue(hasattr(result, 'first'))
-            self.assertTrue(hasattr(result, 'count'))
-        except Exception:
-            # Some errors might be expected if DB isn't set up, but not AttributeError about _Manager
+            os.unlink(self.temp_db.name)
+        except:
             pass
 
-    async def test_model_objects_create_method(self):
-        """Test that Model.objects.create() exists."""
-        # Just test that the method exists, don't actually create anything
-        self.assertTrue(hasattr(TestModel.objects, 'create'))
-        self.assertTrue(callable(TestModel.objects.create))
+    async def test_model_objects_attribute_exists(self):
+        """Test that Model.objects exists and has required methods."""
+        # Test that objects attribute exists
+        self.assertTrue(hasattr(TestUser, 'objects'))
+        
+        # Test that objects has the essential methods
+        self.assertTrue(hasattr(TestUser.objects, 'all'))
+        self.assertTrue(hasattr(TestUser.objects, 'filter'))
+        self.assertTrue(hasattr(TestUser.objects, 'create'))
+        self.assertTrue(hasattr(TestUser.objects, 'get'))
+
+    async def test_model_objects_all_method_works(self):
+        """Test that Model.objects.all() returns a list."""
+        # This should not raise AttributeError: '_Manager' object has no attribute 'all'
+        result = await TestUser.objects.all()
+        # Result should be a list (empty initially)
+        self.assertIsInstance(result, list)
+        self.assertEqual(len(result), 0)
+
+    async def test_model_objects_count_method(self):
+        """Test that Model.objects.count() works."""
+        count = await TestUser.objects.count()
+        self.assertEqual(count, 0)
+
+    async def test_model_objects_filter_returns_queryset(self):
+        """Test that Model.objects.filter() returns a QuerySet with proper methods."""
+        result = TestUser.objects.filter(name="test")
+        
+        # Should have QuerySet methods
+        self.assertTrue(hasattr(result, 'all'))
+        self.assertTrue(hasattr(result, 'first'))
+        self.assertTrue(hasattr(result, 'count'))
+        
+        # Should be able to call these methods
+        all_results = await result.all()
+        self.assertIsInstance(all_results, list)
+        
+        count = await result.count()
+        self.assertEqual(count, 0)
+
+    async def test_model_crud_operations(self):
+        """Test complete CRUD operations on the model."""
+        # CREATE: Test creating a user
+        user_data = {
+            'id': 'user-123',
+            'name': 'Test User',
+            'email': 'test@example.com',
+            'data': {'role': 'admin'}
+        }
+        
+        # CREATE: Use Model.objects.create() to insert data
+        await TestUser.objects.create(
+            id=user_data['id'],
+            name=user_data['name'],
+            email=user_data['email'],
+            data=user_data['data']
+        )
+        
+        # READ: Test that we can fetch the user
+        all_users = await TestUser.objects.all()
+        self.assertEqual(len(all_users), 1)
+        
+        user = all_users[0]
+        self.assertEqual(user.id, 'user-123')
+        self.assertEqual(user.name, 'Test User')
+        self.assertEqual(user.email, 'test@example.com')
+        
+        # Test filter
+        filtered_users = await TestUser.objects.filter(name='Test User').all()
+        self.assertEqual(len(filtered_users), 1)
+        self.assertEqual(filtered_users[0].email, 'test@example.com')
+        
+        # Test count
+        count = await TestUser.objects.count()
+        self.assertEqual(count, 1)
+        
+        # Test get (should work if only one result)
+        single_user = await TestUser.objects.filter(email='test@example.com').first()
+        self.assertIsNotNone(single_user)
+        self.assertEqual(single_user.name, 'Test User')

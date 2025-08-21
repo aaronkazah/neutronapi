@@ -342,3 +342,11 @@ class PostgreSQLProvider(BaseProvider):
 
     async def rename_column(self, app_label: str, table_base_name: str, old_name: str, new_name: str):
         await self.execute(f"ALTER TABLE {self._pg_ident(app_label)}.{self._pg_ident(table_base_name)} RENAME COLUMN {self._pg_ident(old_name)} TO {self._pg_ident(new_name)}")
+    
+    def get_placeholder(self, index: int = 1) -> str:
+        """PostgreSQL uses numbered placeholders like $1, $2, etc."""
+        return f"${index}"
+    
+    def get_placeholders(self, count: int) -> str:
+        """Get multiple numbered placeholders for PostgreSQL."""
+        return ", ".join([f"${i+1}" for i in range(count)])
