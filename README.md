@@ -402,13 +402,422 @@ class BusinessLogicError(APIException):
         super().__init__(message, type="business_error")
 ```
 
+## OpenAPI & Swagger Documentation
+
+NeutronAPI includes comprehensive OpenAPI 3.0 and Swagger support with automatic spec generation. **Documentation hosting is completely optional and under your control:**
+
+```python
+from neutronapi.base import API
+from neutronapi.application import Application
+from neutronapi.openapi.openapi import OpenAPIGenerator
+from neutronapi.openapi.swagger import SwaggerConverter
+
+class UserAPI(API):
+    resource = "/users"
+    title = "User Management"
+    description = "User registration and management endpoints"
+    tags = ["Users"]
+    
+    @API.endpoint("/", methods=["GET"], 
+                  summary="List all users",
+                  description="Retrieve a paginated list of all users",
+                  tags=["Users"],
+                  response_schema={
+                      "type": "object",
+                      "properties": {
+                          "users": {
+                              "type": "array",
+                              "items": {
+                                  "type": "object",
+                                  "properties": {
+                                      "id": {"type": "integer"},
+                                      "name": {"type": "string"},
+                                      "email": {"type": "string", "format": "email"}
+                                  }
+                              }
+                          },
+                          "total": {"type": "integer"},
+                          "page": {"type": "integer"}
+                      }
+                  },
+                  parameters=[
+                      {
+                          "name": "page",
+                          "in": "query",
+                          "description": "Page number",
+                          "required": False,
+                          "schema": {"type": "integer", "default": 1}
+                      }
+                  ])
+    async def list_users(self, scope, receive, send, **kwargs):
+        page = int(kwargs.get('params', {}).get('page', 1))
+        users = [{"id": 1, "name": "John", "email": "john@example.com"}]
+        return await self.response({"users": users, "total": 1, "page": page})
+    
+    @API.endpoint("/", methods=["POST"],
+                  summary="Create new user",
+                  description="Register a new user account",
+                  request_schema={
+                      "type": "object",
+                      "required": ["name", "email"],
+                      "properties": {
+                          "name": {"type": "string", "minLength": 2},
+                          "email": {"type": "string", "format": "email"},
+                          "age": {"type": "integer", "minimum": 13}
+                      }
+                  },
+                  response_schema={
+                      "type": "object",
+                      "properties": {
+                          "id": {"type": "integer"},
+                          "name": {"type": "string"},
+                          "email": {"type": "string"},
+                          "created_at": {"type": "string", "format": "date-time"}
+                      }
+                  },
+                  responses={
+                      400: {
+                          "description": "Validation error",
+                          "schema": {
+                              "type": "object",
+                              "properties": {
+                                  "error": {"type": "string"}
+                              }
+                          }
+                      }
+                  })
+    async def create_user(self, scope, receive, send, **kwargs):
+        data = kwargs["body"]
+        user = {"id": 123, "name": data["name"], "email": data["email"], "created_at": "2023-01-01T00:00:00Z"}
+        return await self.response(user, status_code=201)
+
+app = Application(apis=[UserAPI()])
+```
+
+### Generate OpenAPI Specification
+
+```python
+import asyncio
+from neutronapi.openapi.openapi import OpenAPIGenerator
+
+# Generate from entire application
+async def generate_docs():
+    generator = OpenAPIGenerator(
+        title="My API",
+        description="A comprehensive REST API built with NeutronAPI",
+        version="1.0.0",
+        servers=[
+            {"url": "https://api.example.com", "description": "Production server"},
+            {"url": "https://staging-api.example.com", "description": "Staging server"}
+        ],
+        contact={
+            "name": "API Support",
+            "url": "https://example.com/support",
+            "email": "support@example.com"
+        },
+        license_info={
+            "name": "MIT",
+            "url": "https://opensource.org/licenses/MIT"
+        }
+    )
+    
+    # Generate from Application instance
+    openapi_spec = await generator.generate_from_application(app)
+    
+    # Generate from individual API
+    user_api_spec = await generator.generate_from_api(UserAPI())
+    
+    # Save to file
+    import json
+    with open('openapi.json', 'w') as f:
+        json.dump(openapi_spec, f, indent=2)
+    
+    return openapi_spec
+
+# Run the generator
+spec = asyncio.run(generate_docs())
+print("OpenAPI spec generated!")
+```
+
+### Convert to Swagger 2.0
+
+```python
+from neutronapi.openapi.swagger import SwaggerConverter
+
+# Convert OpenAPI 3.0 to Swagger 2.0 for legacy compatibility
+converter = SwaggerConverter()
+swagger_spec = converter.convert_openapi_to_swagger(openapi_spec)
+
+# Save Swagger spec
+with open('swagger.json', 'w') as f:
+    json.dump(swagger_spec, f, indent=2)
+```
+
+### Optional: Serve Interactive Documentation
+
+**Note**: NeutronAPI **never automatically hosts documentation**. You have complete control over where and how to serve your API docs.
+
+```python
+from neutronapi.base import API
+from neutronapi.application import Application
+
+# OPTIONAL: Create a docs API only if you want to self-host documentation
+class DocsAPI(API):
+    resource = "/docs"  # You choose the path - could be /api-docs, /documentation, etc.
+    
+    @API.endpoint("/openapi.json", methods=["GET"])
+    async def openapi_spec(self, scope, receive, send, **kwargs):
+        """Serve OpenAPI specification - completely optional endpoint"""
+        generator = OpenAPIGenerator(
+            title="My API Documentation",
+            description="Auto-generated API documentation",
+            version="1.0.0"
+        )
+        spec = await generator.generate_from_application(self.app)
+        return await self.response(spec)
+    
+    @API.endpoint("/", methods=["GET"])
+    async def swagger_ui(self, scope, receive, send, **kwargs):
+        """Serve Swagger UI"""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>API Documentation</title>
+            <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@3.52.5/swagger-ui.css" />
+        </head>
+        <body>
+            <div id="swagger-ui"></div>
+            <script src="https://unpkg.com/swagger-ui-dist@3.52.5/swagger-ui-bundle.js"></script>
+            <script>
+                SwaggerUIBundle({
+                    url: '/docs/openapi.json',
+                    dom_id: '#swagger-ui',
+                    presets: [
+                        SwaggerUIBundle.presets.apis,
+                        SwaggerUIBundle.presets.standalone
+                    ]
+                });
+            </script>
+        </body>
+        </html>
+        """
+        return await self.response(html, headers=[(b"content-type", b"text/html")])
+
+# COMPLETELY OPTIONAL: Only add DocsAPI if you want self-hosted docs
+app = Application(
+    apis=[
+        UserAPI(),
+        DocsAPI()  # Only include this if you want docs at /docs
+    ]
+)
+
+# Alternative: Generate specs for external hosting (recommended for production)
+async def export_specs():
+    generator = OpenAPIGenerator(title="My API", version="1.0.0")
+    spec = await generator.generate_from_application(app)
+    
+    # Export to file for external hosting (Postman, Insomnia, etc.)
+    with open('api-spec.json', 'w') as f:
+        json.dump(spec, f, indent=2)
+    
+    # Or upload to external documentation service
+    # await upload_to_readme_io(spec)
+    # await upload_to_postman(spec)
+```
+
+### Advanced Schema Patterns
+
+```python
+# Reusable schema components
+USER_SCHEMA = {
+    "type": "object",
+    "required": ["name", "email"],
+    "properties": {
+        "id": {"type": "integer", "description": "Unique user identifier"},
+        "name": {"type": "string", "minLength": 2, "maxLength": 100},
+        "email": {"type": "string", "format": "email"},
+        "age": {"type": "integer", "minimum": 13, "maximum": 120},
+        "created_at": {"type": "string", "format": "date-time"},
+        "profile": {
+            "type": "object",
+            "properties": {
+                "bio": {"type": "string", "maxLength": 500},
+                "avatar_url": {"type": "string", "format": "uri"}
+            }
+        }
+    }
+}
+
+ERROR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "error": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string"},
+                "message": {"type": "string"}
+            }
+        }
+    }
+}
+
+class AdvancedUserAPI(API):
+    resource = "/users"
+    
+    @API.endpoint("/<int:user_id>", methods=["GET"],
+                  summary="Get user by ID",
+                  parameters=[
+                      {
+                          "name": "user_id",
+                          "in": "path",
+                          "required": True,
+                          "schema": {"type": "integer"},
+                          "description": "User ID"
+                      },
+                      {
+                          "name": "include",
+                          "in": "query",
+                          "schema": {
+                              "type": "array",
+                              "items": {"type": "string", "enum": ["profile", "posts"]}
+                          },
+                          "description": "Additional data to include"
+                      }
+                  ],
+                  response_schema=USER_SCHEMA,
+                  responses={
+                      404: {"description": "User not found", "schema": ERROR_SCHEMA}
+                  })
+    async def get_user(self, scope, receive, send, **kwargs):
+        user_id = kwargs["user_id"]
+        # Your logic here
+        return await self.response({"id": user_id, "name": "John", "email": "john@example.com"})
+```
+
+## Documentation Deployment Options
+
+NeutronAPI gives you **complete control** over how to deploy your API documentation:
+
+### 1. **External Documentation Services** (Recommended)
+```python
+# Generate spec for external hosting
+spec = await generator.generate_from_application(app)
+
+# Popular external documentation platforms:
+# - readme.io
+# - GitBook
+# - Postman Documentation
+# - Insomnia Documentation
+# - Stoplight
+# - SwaggerHub
+```
+
+### 2. **Static File Hosting**
+```python
+# Generate static files for CDN/static hosting
+import json
+
+spec = await generator.generate_from_application(app)
+
+# Save for static hosting (GitHub Pages, Netlify, etc.)
+with open('public/openapi.json', 'w') as f:
+    json.dump(spec, f)
+
+# Generate static Swagger UI
+swagger_html = f"""
+<!DOCTYPE html>
+<html>
+<head><title>API Docs</title></head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js"></script>
+    <script>
+        SwaggerUIBundle({{
+            url: './openapi.json',
+            dom_id: '#swagger-ui'
+        }});
+    </script>
+</body>
+</html>
+"""
+with open('public/index.html', 'w') as f:
+    f.write(swagger_html)
+```
+
+### 3. **Self-Hosted (Optional)**
+```python
+# Only if you want to serve docs from your API server
+class OptionalDocsAPI(API):
+    resource = "/internal-docs"  # You control the path
+    
+    @API.endpoint("/spec", methods=["GET"])
+    async def spec(self, scope, receive, send, **kwargs):
+        # Your choice to include this endpoint
+        spec = await generator.generate_from_application(self.app)
+        return await self.response(spec)
+
+# Add only if you explicitly want self-hosted docs
+app = Application(
+    apis=[
+        UserAPI(),
+        # OptionalDocsAPI()  # Uncomment only if desired
+    ]
+)
+```
+
+### 4. **CI/CD Integration**
+```python
+# Example: GitHub Actions workflow
+# .github/workflows/docs.yml
+"""
+name: Generate API Docs
+on: [push]
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Generate OpenAPI spec
+        run: |
+          python -c "
+          import asyncio
+          from your_app import app
+          from neutronapi.openapi.openapi import OpenAPIGenerator
+          
+          async def generate():
+              gen = OpenAPIGenerator(title='My API', version='1.0.0')
+              spec = await gen.generate_from_application(app)
+              with open('openapi.json', 'w') as f:
+                  json.dump(spec, f, indent=2)
+          
+          asyncio.run(generate())
+          "
+      - name: Deploy to documentation service
+        run: |
+          # Upload to your chosen documentation platform
+          curl -X POST https://api.readme.io/api/v1/api-specification \
+            -H "authorization: Basic $README_API_KEY" \
+            -F "spec=@openapi.json"
+"""
+```
+
+## Key Principles
+
+- **🔒 No Magic**: Documentation hosting is explicit and optional
+- **🎯 Developer Control**: You choose where and how to serve docs  
+- **📋 Spec Generation**: Automatic OpenAPI generation from your code
+- **🔄 Multiple Formats**: OpenAPI 3.0, Swagger 2.0, and custom exports
+- **🚀 External Integration**: Works with all major documentation platforms
+
 ## Why NeutronAPI?
 
 - **🚀 Performance**: Built on ASGI/uvicorn for maximum throughput
 - **🏗️ Architecture**: Clean separation with universal dependency injection  
 - **🔒 Type Safety**: Comprehensive typing with IDE support
+- **📚 Auto Documentation**: OpenAPI 3.0 & Swagger 2.0 generation
 - **🎯 Developer Experience**: Rich error messages, validation, and documentation
 - **📦 Batteries Included**: ORM, migrations, background tasks, middleware
 - **🔧 Production Ready**: Multi-worker support, monitoring, and deployment tools
 
-Perfect for building modern APIs, microservices, and high-performance web applications.
+Perfect for building modern APIs, microservices, and high-performance web applications with automatic documentation.
