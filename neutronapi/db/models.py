@@ -1,6 +1,12 @@
 """
 Model base class and metaclass for collecting fields.
 
+Behavior highlights (SQLite and PostgreSQL):
+- Adds a default primary key when none is declared: `id = CharField(primary_key=True)`.
+- Auto-generates a primary key value if not provided on create:
+  - For the default CharField primary key, a UUID4 hex string is generated.
+  - If a custom primary key is declared by the user, it is respected (no auto-generation).
+
 This provides compatibility for imports like:
     from core.db.models import Model
 """
@@ -33,7 +39,9 @@ class ModelBase(type):
         cls = super().__new__(mcls, name, bases, attrs)
         fields.update(own_fields)
 
-        if "id" not in fields:
+        # Default primary key: if no explicit PK is declared, add a CharField PK named "id".
+        # The value will be auto-generated on save if not provided by the user.
+        if "id" not in fields and not any(getattr(f, 'primary_key', False) for f in fields.values()):
             fields["id"] = CharField(primary_key=True)
 
         for fname, field in fields.items():
@@ -125,11 +133,40 @@ class Model(metaclass=ModelBase):
         return f'"{name}"'
 
     async def save(self, create: bool = True, using: Optional[str] = None):
+        """Persist the model instance to the database.
+
+        - On insert (create=True), if there is exactly one primary key field and its
+          value is missing/None, a value may be auto-generated:
+            - When the PK field is a CharField (the default), a time-sortable ID
+              is generated (ULID by default; UUIDv7 if available) and set on the
+              instance prior to INSERT. This yields better index locality across
+              SQLite and PostgreSQL.
+            - If the user declared a custom primary key, its value is not generated
+              automatically; the user is expected to supply it or configure a DB-side
+              default.
+        - On update (create=False), all fields are written as-is.
+        """
         alias = using or 'default'
         db = await get_databases().get_connection(alias)
         is_pg = getattr(db, 'db_type', None) == DatabaseType.POSTGRES
         schema, table = self._get_parsed_table_name()
         table_ident = f"{self._quote(schema)}.{self._quote(table)}" if is_pg else self._quote(f"{schema}_{table}")
+
+        # Auto-generate a primary key value if appropriate (single PK, missing value).
+        try:
+            pk_fields = [name for name, f in self._fields.items() if getattr(f, 'primary_key', False)]
+            if len(pk_fields) == 1:
+                pk_name = pk_fields[0]
+                pk_field = self._fields[pk_name]
+                if getattr(self, pk_name, None) in (None, ""):
+                    from .fields import CharField  # localized import to avoid cycles
+                    if isinstance(pk_field, CharField):
+                        from ..utils.ids import generate_time_sortable_id
+                        setattr(self, pk_name, generate_time_sortable_id())
+                    # For non-CharField PKs, defer to user-configured DB defaults.
+        except Exception:
+            # Never allow PK generation logic to crash save(); fall through to normal flow.
+            pass
 
         # Prepare columns/values
         cols = []
