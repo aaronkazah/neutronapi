@@ -118,14 +118,19 @@ class Application:
                         raise ValueError(f"API {api.__class__.__name__} must define a non-null 'resource'")
                     self.apis[name] = api
             else:
-                # For list[API], use the resource as the key (fallback behavior)
+                # For list[API], use the API name as the key for reverse lookups
                 for api in apis:
                     if not hasattr(api, 'resource'):
                         raise ValueError(f"API {api.__class__.__name__} must have a 'resource' attribute")
                     resource = getattr(api, 'resource', None)
                     if resource is None:
                         raise ValueError(f"API {api.__class__.__name__} must define a non-null 'resource'")
-                    self.apis[resource] = api
+                    
+                    # Require explicit 'name' attribute for reverse lookups
+                    if not hasattr(api, 'name') or not api.name:
+                        raise ValueError(f"API {api.__class__.__name__} must have a 'name' attribute for reverse lookups")
+                    
+                    self.apis[api.name] = api
         
         # Validate no duplicate route names across all APIs
         self._validate_unique_route_names()
