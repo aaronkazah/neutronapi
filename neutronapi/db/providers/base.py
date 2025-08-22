@@ -51,3 +51,10 @@ class BaseProvider(ABC):
     def deserialize(self, value: str) -> Any:
         pass
 
+    # Optional hook: providers can implement automatic full-text setup during migrations
+    async def setup_full_text(self, app_label: str, table_base_name: str, search_meta: dict, fields: Dict[str, Any]):
+        """Create database-specific full-text search structures.
+
+        Default implementation does nothing. Providers may override.
+        """
+        return

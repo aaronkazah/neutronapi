@@ -456,3 +456,203 @@ class SQLiteProvider(BaseProvider):
     def get_placeholders(self, count: int) -> str:
         """Get multiple ? placeholders for SQLite."""
         return ", ".join(["?"] * count)
+
+    # Full-text search condition builder (FTS5 or LIKE fallback)
+    def build_search_condition(
+        self,
+        table: str,
+        search_info: Dict[str, Any],
+        model_fields: Dict[str, Any],
+        param_start: int,
+        is_sqlite: bool = True,
+    ) -> Tuple[str, list]:
+        """Build an SQLite full-text search condition.
+
+        Uses FTS5 MATCH against a configured FTS virtual table when available,
+        otherwise falls back to a case-insensitive LIKE across detected text fields.
+
+        Configuration (optional): DATABASES['default']['OPTIONS']['FTS'] can specify:
+          - table: name of the FTS5 table (default: f"{table}_fts")
+        """
+        query = (search_info.get('query') or '').strip()
+        if not query:
+            return "", []
+
+        # Determine fields to search (explicit > meta > inferred)
+        fields = list(search_info.get('fields') or [])
+        meta = search_info.get('meta') or {}
+        if not fields:
+            mf = meta.get('search_fields')
+            if mf:
+                fields = list(mf)
+        if not fields:
+            try:
+                from ..fields import CharField, TextField
+                for name, fld in (model_fields or {}).items():
+                    if isinstance(fld, (CharField, TextField)):
+                        fields.append(name)
+            except Exception:
+                for name, fld in (model_fields or {}).items():
+                    cls_name = getattr(getattr(fld, '__class__', None), '__name__', '')
+                    if 'CharField' in cls_name or 'TextField' in cls_name:
+                        fields.append(name)
+
+        if not fields:
+            return "", []
+
+        options = dict(self.config.get('OPTIONS', {}) or {})
+        fts_cfg = options.get('FTS')
+        # Model Meta can enable/override FTS table name
+        meta_fts = meta.get('sqlite_fts')
+        if meta_fts is not None:
+            fts_cfg = meta_fts
+        fts_table = None
+        if isinstance(fts_cfg, dict):
+            # If dict provided, honor explicit name or default to <table>_fts
+            fts_table = fts_cfg.get('table') or f"{table}_fts"
+        elif fts_cfg:
+            # Any truthy non-dict also enables default
+            fts_table = f"{table}_fts"
+
+        if fts_table:
+            # Build MATCH query; if specific fields provided, constrain via column qualifiers.
+            # E.g., name:foo OR description:foo
+            if search_info.get('fields'):
+                match_expr = " OR ".join([f"{col}:{query}" for col in fields])
+            else:
+                match_expr = query
+            placeholder = self.get_placeholder(param_start)
+            condition = f"rowid IN (SELECT rowid FROM {fts_table} WHERE {fts_table} MATCH {placeholder})"
+            return condition, [match_expr]
+
+        # Fallback: LIKE across text fields (case-insensitive)
+        conditions: List[str] = []
+        params: List[Any] = []
+        for col in fields:
+            placeholder = self.get_placeholder(param_start)
+            # Use LOWER(field) LIKE LOWER(?) for case-insensitivity
+            conditions.append(f"LOWER(\"{col}\") LIKE LOWER({placeholder})")
+            params.append(f"%{query}%")
+        return " OR ".join(conditions), params
+
+    def build_search_order_by(
+        self,
+        table: str,
+        search_info: Dict[str, Any],
+        model_fields: Dict[str, Any],
+        param_start: int,
+        is_sqlite: bool = True,
+    ) -> Tuple[str, list]:
+        """Build ORDER BY clause for SQLite FTS when available.
+
+        Uses a correlated subselect to compute bm25 score against the FTS table
+        for each row. If FTS isn't configured, returns an empty clause.
+        """
+        query = (search_info.get('query') or '').strip()
+        if not query:
+            return "", []
+
+        fields = list(search_info.get('fields') or [])
+        meta = search_info.get('meta') or {}
+        if not fields:
+            mf = meta.get('search_fields')
+            if mf:
+                fields = list(mf)
+        if not fields:
+            try:
+                from ..fields import CharField, TextField
+                for name, fld in (model_fields or {}).items():
+                    if isinstance(fld, (CharField, TextField)):
+                        fields.append(name)
+            except Exception:
+                for name, fld in (model_fields or {}).items():
+                    cls_name = getattr(getattr(fld, '__class__', None), '__name__', '')
+                    if 'CharField' in cls_name or 'TextField' in cls_name:
+                        fields.append(name)
+
+        options = dict(self.config.get('OPTIONS', {}) or {})
+        fts_cfg = options.get('FTS')
+        meta_fts = meta.get('sqlite_fts')
+        if meta_fts is not None:
+            fts_cfg = meta_fts
+        fts_table = None
+        if isinstance(fts_cfg, dict):
+            fts_table = fts_cfg.get('table') or f"{table}_fts"
+        elif fts_cfg:
+            fts_table = f"{table}_fts"
+        if not fts_table:
+            return "", []
+
+        # Build the same match expression as condition
+        if search_info.get('fields'):
+            match_expr = " OR ".join([f"{col}:{query}" for col in fields])
+        else:
+            match_expr = query
+        placeholder = self.get_placeholder(param_start)
+        # Correlated subselect computes bm25 for matching rowid; ASC => best score first
+        order_clause = (
+            f"(SELECT bm25({fts_table}) FROM {fts_table} "
+            f"WHERE {fts_table}.rowid = {table}.rowid AND {fts_table} MATCH {placeholder}) ASC"
+        )
+        return order_clause, [match_expr]
+
+    async def setup_full_text(self, app_label: str, table_base_name: str, search_meta: dict, fields: Dict[str, Any]):
+        """Create FTS5 virtual table and triggers if enabled via search_meta.
+
+        Expects search_meta to optionally include:
+          - sqlite_fts: truthy or {'table': name}
+          - search_fields: iterable of column names to include in FTS
+        """
+        if not search_meta:
+            return
+        fts_cfg = search_meta.get('sqlite_fts')
+        if not fts_cfg:
+            return
+        base_table = f"{app_label}_{table_base_name}"
+        # Determine fts table name
+        if isinstance(fts_cfg, dict) and 'table' in fts_cfg:
+            fts_table = fts_cfg['table']
+        else:
+            fts_table = f"{base_table}_fts"
+
+        # Determine fields for FTS
+        fts_fields = list(search_meta.get('search_fields') or [])
+        if not fts_fields:
+            # Infer Char/Text fields
+            try:
+                from ..fields import CharField, TextField
+                for name, fld in (fields or {}).items():
+                    if isinstance(fld, (CharField, TextField)):
+                        fts_fields.append(name)
+            except Exception:
+                for name, fld in (fields or {}).items():
+                    cls_name = getattr(getattr(fld, '__class__', None), '__name__', '')
+                    if 'CharField' in cls_name or 'TextField' in cls_name:
+                        fts_fields.append(name)
+        if not fts_fields:
+            return
+
+        cols = ", ".join(fts_fields)
+        # Create FTS table with content binding for rowid sync
+        await self.execute(
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS \"{fts_table}\" USING fts5({cols}, content='\"{base_table}\"', content_rowid='rowid')"
+        )
+
+        # Triggers to keep content synchronized
+        cols_insert = ", ".join(fts_fields)
+        new_cols_vals = ", ".join([f"new.{c}" for c in fts_fields])
+        old_cols_vals = ", ".join([f"old.{c}" for c in fts_fields])
+
+        await self.execute(
+            f"CREATE TRIGGER IF NOT EXISTS {base_table}_ai AFTER INSERT ON \"{base_table}\" BEGIN "
+            f"INSERT INTO \"{fts_table}\"(rowid, {cols_insert}) VALUES (new.rowid, {new_cols_vals}); END;"
+        )
+        await self.execute(
+            f"CREATE TRIGGER IF NOT EXISTS {base_table}_ad AFTER DELETE ON \"{base_table}\" BEGIN "
+            f"INSERT INTO \"{fts_table}\"({fts_table}, rowid, {cols_insert}) VALUES('delete', old.rowid, {old_cols_vals}); END;"
+        )
+        await self.execute(
+            f"CREATE TRIGGER IF NOT EXISTS {base_table}_au AFTER UPDATE ON \"{base_table}\" BEGIN "
+            f"INSERT INTO \"{fts_table}\"({fts_table}, rowid, {cols_insert}) VALUES('delete', old.rowid, {old_cols_vals}); "
+            f"INSERT INTO \"{fts_table}\"(rowid, {cols_insert}) VALUES (new.rowid, {new_cols_vals}); END;"
+        )

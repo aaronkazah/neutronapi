@@ -89,6 +89,7 @@ class QuerySet(Generic[T]):
         self._values_fields = []
         self._values_flat = False
         self._result_cache = None
+        self._search_order_by_rank = False
         
         # Will be determined when we get the provider
         self._is_sqlite = None
@@ -172,6 +173,17 @@ class QuerySet(Generic[T]):
                 qs._order_by.append(f"{field} ASC")
         return qs
 
+    def order_by_rank(self) -> 'QuerySet':
+        """Order results by search rank when a search filter is present.
+
+        - PostgreSQL: uses ts_rank(...)
+        - SQLite with FTS5 configured: uses bm25(fts_table)
+        - Otherwise: no-op (falls back to existing ordering)
+        """
+        qs = self._clone()
+        qs._search_order_by_rank = True
+        return qs
+
     def limit(self, count: int) -> 'QuerySet':
         qs = self._clone()
         qs._limit_count = count
@@ -180,6 +192,54 @@ class QuerySet(Generic[T]):
     def offset(self, count: int) -> 'QuerySet':
         qs = self._clone()
         qs._offset_count = count
+        return qs
+
+    def search(self, query: str, *fields) -> 'QuerySet':
+        """
+        Perform full-text search across specified fields.
+        
+        Args:
+            query: Search term(s)
+            *fields: Fields to search in. If none provided, searches all text fields.
+            
+        Returns:
+            QuerySet filtered by search criteria
+            
+        Example:
+            # Search across all text fields
+            User.objects.search("john doe")
+            
+            # Search specific fields
+            User.objects.search("john", "name", "email")
+        """
+        if not query or not query.strip():
+            return self
+            
+        qs = self._clone()
+        # Extract optional model-level Meta config for search
+        def _extract_search_meta(model_cls):
+            meta = getattr(model_cls, 'Meta', None)
+            if not meta:
+                return None
+            out = {}
+            for key in (
+                'search_fields',         # sequence[str]
+                'search_config',         # postgres text search config
+                'search_weights',        # dict[field->A|B|C|D]
+                'sqlite_fts',            # bool or {'table': str}
+            ):
+                if hasattr(meta, key):
+                    out[key] = getattr(meta, key)
+            return out or None
+
+        search_info = {
+            'query': query.strip(),
+            'fields': list(fields) if fields else None,
+            'meta': _extract_search_meta(self.model),
+        }
+        
+        # Add search filter to be processed by the database provider
+        qs._filters.append({'type': 'search', 'search_info': search_info})
         return qs
 
     def values(self, *fields) -> 'QuerySet':
@@ -435,11 +495,70 @@ class QuerySet(Generic[T]):
                     all_conditions.append(f"({q_condition})")
                     all_params.extend(q_params)
                     param_counter += len(q_params)
+            elif filter_item.get('type') == 'search':
+                search_condition, search_params = self._build_search_condition(filter_item['search_info'], param_counter)
+                if search_condition:
+                    all_conditions.append(f"({search_condition})")
+                    all_params.extend(search_params)
+                    param_counter += len(search_params)
 
         if not all_conditions:
             return "", []
 
         return " AND ".join(all_conditions), all_params
+
+    def _build_search_condition(self, search_info: dict, param_start: int) -> tuple:
+        """Build search condition using database-specific full-text search.
+
+        Note: Provider must already be initialized via _get_provider() before this is called.
+        """
+        provider = self.provider
+
+        # Delegate to provider for database-specific search implementation
+        if provider and hasattr(provider, 'build_search_condition'):
+            # Pass table name so providers can target FTS tables when applicable
+            return provider.build_search_condition(
+                self.table,
+                search_info,
+                self.model._fields,
+                param_start,
+                self._is_sqlite or False,
+            )
+
+        # Fallback to basic LIKE search if provider doesn't support full-text search
+        return self._build_fallback_search_condition(search_info, param_start)
+    
+    def _build_fallback_search_condition(self, search_info: dict, param_start: int) -> tuple:
+        """Fallback search using LIKE for databases without full-text search support."""
+        query = search_info['query']
+        search_fields = search_info.get('fields')
+        
+        # If no specific fields provided, search all text-like fields
+        if not search_fields:
+            search_fields = []
+            for name, field in self.model._fields.items():
+                if hasattr(field, '__class__') and (
+                    'CharField' in field.__class__.__name__ or 'TextField' in field.__class__.__name__
+                ):
+                    search_fields.append(name)
+        
+        if not search_fields:
+            return "", []
+        
+        # Build LIKE conditions for each field
+        conditions = []
+        params = []
+        param_counter = param_start
+        
+        for field in search_fields:
+            if self._is_sqlite:
+                conditions.append(f'"{field}" LIKE ?')
+            else:
+                conditions.append(f'"{field}" ILIKE ${param_counter}')
+                param_counter += 1
+            params.append(f'%{query}%')
+        
+        return " OR ".join(conditions), params
 
     def _build_q_condition(self, q_obj: 'Q', param_start: int) -> tuple:
         """Recursively build SQL condition and parameters from a Q object."""
@@ -517,6 +636,14 @@ class QuerySet(Generic[T]):
                             parts.append(condition)
                             params.extend(json_params)
                             param_counter += len(json_params)
+                    elif lookup_type == 'search':
+                        # Field-specific full-text search (__search)
+                        search_info = {'query': value, 'fields': [field_name]}
+                        condition, s_params = self._build_search_condition(search_info, param_counter)
+                        if condition:
+                            parts.append(condition)
+                            params.extend(s_params)
+                            param_counter += len(s_params)
                     else:
                         if lookup_type == 'in':
                             if not hasattr(value, '__iter__') or isinstance(value, str):
@@ -660,8 +787,34 @@ class QuerySet(Generic[T]):
         if where_clause:
             sql += f" WHERE {where_clause}"
 
+        # Optional: add rank-based ordering when requested and a search filter exists
+        rank_order_clause = None
+        rank_params = []
+        if self._search_order_by_rank and any(f.get('type') == 'search' for f in self._filters):
+            # Use the first search filter as the basis for ranking
+            search_info = next(f['search_info'] for f in self._filters if f.get('type') == 'search')
+            if self.provider and hasattr(self.provider, 'build_search_order_by'):
+                # Start indexing after existing params
+                next_index = (len(params) + 1) if not self._is_sqlite else 1
+                try:
+                    rank_order_clause, rank_params = self.provider.build_search_order_by(
+                        self.table,
+                        search_info,
+                        self.model._fields,
+                        next_index,
+                        self._is_sqlite or False,
+                    )
+                except Exception:
+                    rank_order_clause, rank_params = None, []
+
+        order_clauses = []
+        if rank_order_clause:
+            order_clauses.append(rank_order_clause)
         if self._order_by:
-            sql += f" ORDER BY {', '.join(self._order_by)}"
+            order_clauses.append(', '.join(self._order_by))
+        if order_clauses:
+            sql += f" ORDER BY {', '.join(order_clauses)}"
+            params.extend(rank_params)
 
         if self._limit_count is not None:
             sql += f" LIMIT {self._limit_count}"

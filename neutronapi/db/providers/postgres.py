@@ -181,8 +181,8 @@ class PostgreSQLProvider(BaseProvider):
         if isinstance(value, (dict, list)):
             return f"'{json.dumps(value)}'::jsonb"
         if isinstance(value, str):
-            return f"'{value.replace("'","''")}'"
-        return f"'{str(value).replace("'","''")}'"
+            return "'" + value.replace("'", "''") + "'"
+        return "'" + str(value).replace("'", "''") + "'"
 
     def get_column_type(self, field) -> str:
         from ..fields import (
@@ -350,3 +350,199 @@ class PostgreSQLProvider(BaseProvider):
     def get_placeholders(self, count: int) -> str:
         """Get multiple numbered placeholders for PostgreSQL."""
         return ", ".join([f"${i+1}" for i in range(count)])
+
+    # Full-text search condition builder
+    def build_search_condition(
+        self,
+        table: str,
+        search_info: Dict[str, Any],
+        model_fields: Dict[str, Any],
+        param_start: int,
+        is_sqlite: bool = False,
+    ) -> Tuple[str, list]:
+        """Build a PostgreSQL full-text search condition using tsvector/tsquery.
+
+        - Concatenates selected text fields into a single tsvector
+        - Uses plainto_tsquery for the provided search string
+        - Honors optional config in DATABASES['default']['OPTIONS']['TSVECTOR_CONFIG']
+        """
+        query = (search_info.get('query') or '').strip()
+        if not query:
+            return "", []
+
+        # Determine fields to search (explicit > meta > inferred)
+        fields = list(search_info.get('fields') or [])
+        meta = search_info.get('meta') or {}
+        if not fields:
+            mf = meta.get('search_fields')
+            if mf:
+                fields = list(mf)
+        if not fields:
+            try:
+                from ..fields import CharField, TextField
+                for name, fld in (model_fields or {}).items():
+                    if isinstance(fld, (CharField, TextField)):
+                        fields.append(name)
+            except Exception:
+                # Fallback: include common text-like columns
+                for name, fld in (model_fields or {}).items():
+                    cls_name = getattr(getattr(fld, '__class__', None), '__name__', '')
+                    if 'CharField' in cls_name or 'TextField' in cls_name:
+                        fields.append(name)
+
+        if not fields:
+            return "", []
+
+        # Build concatenated text expression: coalesce(f1,'') || ' ' || coalesce(f2,'') ...
+        coalesced = [f"coalesce({f}, '')" for f in fields]
+        concat_expr = " || ' ' || ".join(coalesced)
+
+        # Optional text search config
+        options = dict(self.config.get('OPTIONS', {}) or {})
+        config = meta.get('search_config') or options.get('TSVECTOR_CONFIG')
+        if config:
+            tsvector_expr = f"to_tsvector('{config}', {concat_expr})"
+            tsquery_expr = f"plainto_tsquery('{config}', {self.get_placeholder(param_start)})"
+        else:
+            tsvector_expr = f"to_tsvector({concat_expr})"
+            tsquery_expr = f"plainto_tsquery({self.get_placeholder(param_start)})"
+
+        condition = f"{tsvector_expr} @@ {tsquery_expr}"
+        return condition, [query]
+
+    def build_search_order_by(
+        self,
+        table: str,
+        search_info: Dict[str, Any],
+        model_fields: Dict[str, Any],
+        param_start: int,
+        is_sqlite: bool = False,
+    ) -> Tuple[str, list]:
+        """Build ORDER BY clause for Postgres search ranking using ts_rank."""
+        query = (search_info.get('query') or '').strip()
+        if not query:
+            return "", []
+
+        # Determine fields to search (explicit > meta > inferred)
+        fields = list(search_info.get('fields') or [])
+        meta = search_info.get('meta') or {}
+        if not fields:
+            mf = meta.get('search_fields')
+            if mf:
+                fields = list(mf)
+        if not fields:
+            try:
+                from ..fields import CharField, TextField
+                for name, fld in (model_fields or {}).items():
+                    if isinstance(fld, (CharField, TextField)):
+                        fields.append(name)
+            except Exception:
+                for name, fld in (model_fields or {}).items():
+                    cls_name = getattr(getattr(fld, '__class__', None), '__name__', '')
+                    if 'CharField' in cls_name or 'TextField' in cls_name:
+                        fields.append(name)
+
+        if not fields:
+            return "", []
+
+        coalesced = [f"coalesce({f}, '')" for f in fields]
+        concat_expr = " || ' ' || ".join(coalesced)
+
+        options = dict(self.config.get('OPTIONS', {}) or {})
+        config = meta.get('search_config') or options.get('TSVECTOR_CONFIG')
+        if config:
+            tsvector_expr = f"to_tsvector('{config}', {concat_expr})"
+            tsquery_placeholder = f"plainto_tsquery('{config}', {self.get_placeholder(param_start)})"
+        else:
+            tsvector_expr = f"to_tsvector({concat_expr})"
+            tsquery_placeholder = f"plainto_tsquery({self.get_placeholder(param_start)})"
+
+        # Optional per-field weights from Meta: {'title': 'A', 'body': 'B'}
+        weights = meta.get('search_weights') or {}
+        if weights:
+            parts = []
+            for f in fields:
+                w = weights.get(f)
+                if not w:
+                    continue
+                text_expr = f"coalesce({f}, '')"
+                if config:
+                    parts.append(f"setweight(to_tsvector('{config}', {text_expr}), '{w}')")
+                else:
+                    parts.append(f"setweight(to_tsvector({text_expr}), '{w}')")
+            if parts:
+                weighted_vec = " || ".join(parts)
+                order_clause = f"ts_rank({weighted_vec}, {tsquery_placeholder}) DESC"
+            else:
+                order_clause = f"ts_rank({tsvector_expr}, {tsquery_placeholder}) DESC"
+        else:
+            order_clause = f"ts_rank({tsvector_expr}, {tsquery_placeholder}) DESC"
+        return order_clause, [query]
+
+    async def setup_full_text(self, app_label: str, table_base_name: str, search_meta: Dict[str, Any], fields: Dict[str, Any]):
+        """Create tsvector column + GIN index + trigger for FTS if configured.
+
+        Honors:
+          - search_fields: iterable of columns to include (default: infer text fields)
+          - search_config: text search config (e.g., 'english')
+        """
+        if not search_meta:
+            return
+        # Determine searchable fields
+        cols = list(search_meta.get('search_fields') or [])
+        if not cols:
+            try:
+                from ..fields import CharField, TextField
+                for name, fld in (fields or {}).items():
+                    if isinstance(fld, (CharField, TextField)):
+                        cols.append(name)
+            except Exception:
+                for name, fld in (fields or {}).items():
+                    cls_name = getattr(getattr(fld, '__class__', None), '__name__', '')
+                    if 'CharField' in cls_name or 'TextField' in cls_name:
+                        cols.append(name)
+        if not cols:
+            return
+
+        schema = self._pg_ident(app_label)
+        table = self._pg_ident(table_base_name)
+        table_qualified = f"{schema}.{table}"
+        config = search_meta.get('search_config')
+
+        # Add search_vector column if not exists
+        await self.execute(f"ALTER TABLE {table_qualified} ADD COLUMN IF NOT EXISTS search_vector tsvector")
+
+        # Build concatenated text expression
+        coalesced = " || ' ' || ".join([f"coalesce({self._pg_ident(c)}, '')" for c in cols])
+        if config:
+            set_expr = f"to_tsvector('{config}', {coalesced})"
+        else:
+            set_expr = f"to_tsvector({coalesced})"
+
+        await self.execute(f"UPDATE {table_qualified} SET search_vector = {set_expr}")
+        await self.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_base_name}_search_vector ON {table_qualified} USING GIN (search_vector)")
+
+        # Create/replace update function and trigger
+        func_name = f"{table_base_name}_tsvector_update"
+        func_ident = f"{schema}.\"{func_name}\""
+        new_expr = set_expr.replace("coalesce(", "coalesce(NEW.")  # prefix with NEW.
+        # Replace identifiers more safely
+        new_expr = " || ' ' || ".join([f"coalesce(NEW.{c}, '')" for c in cols])
+        if config:
+            new_expr = f"to_tsvector('{config}', {new_expr})"
+        else:
+            new_expr = f"to_tsvector({new_expr})"
+
+        func_sql = (
+            f"CREATE OR REPLACE FUNCTION {func_ident}() RETURNS trigger AS $$\n"
+            f"BEGIN\n"
+            f"  NEW.search_vector := {new_expr};\n"
+            f"  RETURN NEW;\n"
+            f"END\n"
+            f"$$ LANGUAGE plpgsql;"
+        )
+        await self.execute(func_sql)
+        await self.execute(f"DROP TRIGGER IF EXISTS {func_name} ON {table_qualified}")
+        await self.execute(
+            f"CREATE TRIGGER {func_name} BEFORE INSERT OR UPDATE ON {table_qualified} FOR EACH ROW EXECUTE FUNCTION {func_ident}()"
+        )

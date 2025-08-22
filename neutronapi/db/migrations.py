@@ -94,9 +94,10 @@ class Operation(ABC):
 
 
 class CreateModel(Operation):
-    def __init__(self, model_name, fields: Dict[str, BaseField]):  # Add type hint
+    def __init__(self, model_name, fields: Dict[str, BaseField], search_meta: Optional[dict] = None):
         self.model_name = model_name  # Expected format: 'app_label.ModelName'
         self.fields = fields
+        self.search_meta = search_meta or None
 
     async def database_forwards(
         self, app_label, provider, from_state, to_state, connection
@@ -109,6 +110,34 @@ class CreateModel(Operation):
 
         # Call create_table with separate app_label (schema) and base name (table)
         await provider.create_table(app_label, table_base_name, field_items)
+        # After creating the base table, setup full-text search structures.
+        # If no explicit search_meta was provided, infer sensible defaults so users need no extra steps.
+        try:
+            if hasattr(provider, 'setup_full_text'):
+                meta = self.search_meta
+                if not meta:
+                    # Infer default meta: include all text-like fields.
+                    inferred = []
+                    try:
+                        from .fields import CharField, TextField
+                        for name, fld in (self.fields or {}).items():
+                            if isinstance(fld, (CharField, TextField)):
+                                inferred.append(name)
+                    except Exception:
+                        for name, fld in (self.fields or {}).items():
+                            cls_name = getattr(getattr(fld, '__class__', None), '__name__', '')
+                            if 'CharField' in cls_name or 'TextField' in cls_name:
+                                inferred.append(name)
+
+                    meta = {'search_fields': inferred}
+                    # Enable SQLite FTS by default to avoid manual SQL
+                    if 'sqlite' in provider.__class__.__name__.lower():
+                        meta['sqlite_fts'] = True
+
+                await provider.setup_full_text(app_label, table_base_name, meta, self.fields)
+        except Exception as e:
+            # Non-fatal: log and continue migrations
+            print(f"Warning: FTS setup skipped for {app_label}.{table_base_name}: {e}")
 
     async def database_backwards(
         self, app_label, provider, from_state, to_state, connection
@@ -127,8 +156,9 @@ class CreateModel(Operation):
             )
             + "\n        }"
         )
-        # Use the original model_name which includes the prefix
-        return f"CreateModel(model_name='{self.model_name}', fields={field_desc})"
+        # Include search_meta when present
+        meta_repr = json.dumps(self.search_meta) if self.search_meta else 'None'
+        return f"CreateModel(model_name='{self.model_name}', fields={field_desc}, search_meta={meta_repr})"
 
 
 class DeleteModel(Operation):
@@ -737,8 +767,17 @@ HASH = {state_json}
             if model_name in model_lookup:
                 model_class = model_lookup[model_name]
                 prefixed_name = self._prefix_model_name(app_label, model_name)
+                # Extract optional search meta from model class
+                search_meta = None
+                meta_cls = getattr(model_class, 'Meta', None)
+                if meta_cls is not None:
+                    meta_dict = {}
+                    for key in ('search_fields', 'search_config', 'search_weights', 'sqlite_fts'):
+                        if hasattr(meta_cls, key):
+                            meta_dict[key] = getattr(meta_cls, key)
+                    search_meta = meta_dict or None
                 operations.append(
-                    CreateModel(model_name=prefixed_name, fields=model_class._fields)
+                    CreateModel(model_name=prefixed_name, fields=model_class._fields, search_meta=search_meta)
                 )
             else:
                 print(

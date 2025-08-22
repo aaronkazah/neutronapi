@@ -279,6 +279,178 @@ black neutronapi
 flake8 neutronapi
 ```
 
+## Full-Text Search (FTS)
+
+NeutronAPI provides database-specific full-text search with a unified API:
+
+- PostgreSQL: native FTS via `to_tsvector`/`plainto_tsquery` (+ optional ranking with `ts_rank`).
+- SQLite: FTS5 virtual tables when configured, with `MATCH` (+ optional ranking with `bm25`).
+- Fallback: case-insensitive `LIKE` across text fields if FTS is not configured.
+
+### Usage
+
+```python
+# Search across all text fields
+await MyModel.objects.search("cheese")
+
+# Search specific fields
+await MyModel.objects.search("cheese", "title", "body")
+
+# Field-specific lookup
+await MyModel.objects.filter(body__search="cheese")
+
+# Order by rank (Postgres ts_rank, SQLite FTS5 bm25)
+await MyModel.objects.search("cheese").order_by_rank()
+```
+
+### SQLite (FTS5) Setup
+
+SQLite requires an FTS5 virtual table that mirrors the searchable text columns of your base table and keeps `rowid` aligned. Enable FTS in settings (empty dict uses the default `<table>_fts` name):
+
+```python
+DATABASES = {
+  'default': {
+    'ENGINE': 'aiosqlite',
+    'NAME': 'db.sqlite3',
+    'OPTIONS': {
+      'FTS': {},  # or {'table': 'my_table_fts'} to override name
+    }
+  }
+}
+```
+
+You must create the FTS table and keep it in sync. A simple pattern:
+
+```sql
+CREATE VIRTUAL TABLE IF NOT EXISTS "app_model_fts" USING fts5(title, body, content='app_model', content_rowid='rowid');
+
+-- Optional triggers to keep FTS in sync
+CREATE TRIGGER IF NOT EXISTS app_model_ai AFTER INSERT ON app_model BEGIN
+  INSERT INTO app_model_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
+END;
+CREATE TRIGGER IF NOT EXISTS app_model_ad AFTER DELETE ON app_model BEGIN
+  INSERT INTO app_model_fts(app_model_fts, rowid, title, body) VALUES('delete', old.rowid, old.title, old.body);
+END;
+CREATE TRIGGER IF NOT EXISTS app_model_au AFTER UPDATE ON app_model BEGIN
+  INSERT INTO app_model_fts(app_model_fts, rowid, title, body) VALUES('delete', old.rowid, old.title, old.body);
+  INSERT INTO app_model_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
+END;
+```
+
+With FTS5 active, `search()` uses `MATCH` and `order_by_rank()` uses `bm25` for ranking.
+
+### PostgreSQL FTS Setup
+
+PostgreSQL works out of the box computing `to_tsvector` on the fly, but for performance you should persist a `tsvector` column and add a GIN index:
+
+```sql
+-- Example for table app_model (columns: title, body)
+ALTER TABLE app_model ADD COLUMN IF NOT EXISTS search_vector tsvector;
+UPDATE app_model SET search_vector = to_tsvector('english', coalesce(title,'') || ' ' || coalesce(body,''));
+CREATE INDEX IF NOT EXISTS idx_app_model_search_vector ON app_model USING GIN (search_vector);
+
+-- Keep vector up to date
+CREATE FUNCTION app_model_tsvector_update() RETURNS trigger AS $$
+BEGIN
+  NEW.search_vector := to_tsvector('english', coalesce(NEW.title,'') || ' ' || coalesce(NEW.body,''));
+  RETURN NEW;
+END
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS app_model_tsvector_update ON app_model;
+CREATE TRIGGER app_model_tsvector_update BEFORE INSERT OR UPDATE ON app_model
+FOR EACH ROW EXECUTE FUNCTION app_model_tsvector_update();
+```
+
+Language configuration can be set via settings:
+
+```python
+DATABASES = {
+  'default': {
+    'ENGINE': 'asyncpg',
+    'NAME': 'mydb',
+    'OPTIONS': {
+      'TSVECTOR_CONFIG': 'english',  # affects to_tsvector/plainto_tsquery
+    }
+  }
+}
+```
+
+### Vector column (`vec`)
+
+The default schema includes a `vec` column for vector embeddings used by semantic vector search (e.g., cosine similarity). This is separate from full‑text search. NeutronAPI supports both:
+
+- Keyword search: `search()` and `__search` use DB-native full-text search.
+- Semantic search: `vector_search()` uses the `vec` embedding column. You can populate it with model embeddings and run nearest-neighbor queries.
+
+FTS is suitable for precise keyword queries; semantic vector search targets meaning/similarity. They can be combined in applications.
+
+### Tutorial: End-to-end Examples
+
+Below are minimal, end-to-end steps to enable and use full‑text search for each database.
+
+PostgreSQL (native FTS)
+- Configure DB engine: set `ENGINE: 'asyncpg'` in `DATABASES['default']`.
+- Optional language: set `OPTIONS['TSVECTOR_CONFIG'] = 'english'` for stemming/stop words.
+- Create your model with text fields (e.g., `title`, `body`) and run migrations.
+- Insert data, then query:
+  - Single field: `await Post.objects.filter(title__search='the middle')`
+  - Multiple fields: `await Post.objects.search('pony', 'title', 'body')`
+  - Rank by relevance: `await Post.objects.search('pony').order_by_rank()`
+- Performance (optional): persist a `tsvector` + GIN index as shown above; this speeds up repeated searches.
+
+SQLite (FTS5)
+- Configure DB engine: set `ENGINE: 'aiosqlite'`.
+- Enable FTS5 mode: set `OPTIONS['FTS'] = {}` (or `{'table': '<name>'}` to override the default `<table>_fts`).
+- Create your model and run migrations.
+- Create the FTS virtual table mirroring searchable columns (see SQL above) and, ideally, add triggers to keep it in sync.
+- Insert data, then query:
+  - Single field: `await Post.objects.filter(title__search='the middle')`
+  - Multiple fields: `await Post.objects.search('pony', 'title', 'body')`
+  - Rank by relevance: `await Post.objects.search('pony').order_by_rank()` (uses `bm25`)
+- Notes: FTS5 provides fast text search with tokenization and stop-word handling; stemming requires specific tokenizers and may vary by build.
+
+### Model Meta: Configuration
+
+Model options can configure search defaults without changing queries:
+
+```python
+from neutronapi.db.models import Model
+from neutronapi.db.fields import CharField, TextField
+
+class Post(Model):
+    title = CharField()
+    body = TextField()
+
+    class Meta:
+        # Default fields to search when none are provided to .search()
+        search_fields = ("title", "body")
+
+        # PostgreSQL: choose stemming/stop-word config (optional)
+        search_config = "english"
+
+        # PostgreSQL ranking weights (optional): A > B > C > D
+        search_weights = {"title": "A", "body": "B"}
+
+        # SQLite: enable FTS5 and/or override FTS table name
+        # True -> use default "<base_table>_fts"; or provide a dict with 'table'
+        sqlite_fts = True  # or {"table": "posts_fts"}
+```
+
+Notes:
+- `.filter(body__search="term")` always targets the specific field.
+- `.search("term")` uses `Meta.search_fields` if set; otherwise autodetects text fields.
+- On SQLite, when `Meta.sqlite_fts` is enabled, the provider uses the configured FTS table name for `MATCH` and ranking.
+
+Basic vs Full‑Text Search
+- Basic search (LIKE/ILIKE): fast to enable; exact substring match only; no stemming or advanced ranking.
+- Full‑text search: tokenized, understands stop words and (in Postgres) stemming; supports relevance ranking and scales better for large text datasets.
+
+FAQ: Do I need embeddings for FTS?
+- No. PostgreSQL full‑text search uses its own `tsvector` representation and does not require or use embedding vectors.
+- Embedding vectors in the `vec` column are for semantic similarity search via `vector_search()` and are independent of FTS.
+
+
 ## Commands
 
 ```bash
@@ -404,7 +576,7 @@ class BusinessLogicError(APIException):
 
 ### Exception Organization
 
-Exceptions are organized by module (like Django):
+Exceptions are organized by module:
 
 ```python
 # Module-specific exceptions
