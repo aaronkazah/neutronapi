@@ -272,13 +272,18 @@ class Command:
         except Exception:
             pass
 
-        # Bootstrap internal test models (used by this package's own tests)
+        # Bootstrap internal test models (only when developing neutronapi itself)
         async def bootstrap_test_models():
             try:
+                # Only bootstrap test models if we're in the neutronapi development environment
+                # This is indicated by the presence of neutronapi source code in the current directory
+                if not os.path.isdir("neutronapi") or not os.path.isfile("neutronapi/__init__.py"):
+                    return  # We're not in the neutronapi development environment
+                
                 from neutronapi.db.migrations import CreateModel
                 from neutronapi.db.connection import get_databases
                 
-                # Try to discover test models from neutronapi.tests.db
+                # Try to discover test models from local neutronapi.tests.db
                 try:
                     from neutronapi.tests.db.test_models import TestUser
                     from neutronapi.tests.db.test_queryset import TestObject
@@ -300,8 +305,9 @@ class Command:
                     
                     print(f"✓ Bootstrapped {len(test_models)} internal test models")
                     
-                except ImportError as e:
-                    print(f"Note: Test models not found, skipping bootstrap: {e}")
+                except ImportError:
+                    # Silently skip if test models not available
+                    pass
                 except Exception as e:
                     print(f"Warning: Failed to bootstrap test models: {e}")
                     
@@ -368,9 +374,8 @@ class Command:
                     )
                     suite.addTests(discovered)
                     return
-                if target == "core" and (os.path.isdir("core/tests") or os.path.isdir("neutronapi/tests")):
-                    test_root = "core/tests" if os.path.isdir("core/tests") else "neutronapi/tests"
-                    discovered = loader.discover(test_root, pattern="test_*.py")
+                if target == "core" and os.path.isdir("core/tests"):
+                    discovered = loader.discover("core/tests", pattern="test_*.py")
                     suite.addTests(discovered)
                     return
 
@@ -387,14 +392,13 @@ class Command:
                 for target in filtered_args:
                     add_target(target)
             else:
-                # Default: discover core and all apps/*/tests
+                # Default: discover all apps/*/tests (project-specific only)
                 test_dirs = []
 
-                # Support both legacy core/tests and current neutronapi/tests
+                # Only look for project tests, not installed package tests
+                # Support legacy core/tests if it exists in the current project
                 if os.path.isdir("core/tests"):
                     test_dirs.append("core/tests")
-                if os.path.isdir("neutronapi/tests"):
-                    test_dirs.append("neutronapi/tests")
 
                 if os.path.isdir("apps"):
                     # Add apps to sys.path for proper module resolution
