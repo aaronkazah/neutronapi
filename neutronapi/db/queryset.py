@@ -682,9 +682,7 @@ class QuerySet(Generic[T]):
                 if result_dict.get(field) and isinstance(result_dict[field], str):
                     result_dict[field] = self.provider.deserialize(result_dict[field])
 
-        for field, value in result_dict.items():
-            if isinstance(value, datetime.datetime):
-                result_dict[field] = value.isoformat()
+        # Keep datetime objects as datetime objects, don't convert to strings
 
         for field in self._json_fields:
             result_dict.setdefault(field, {})

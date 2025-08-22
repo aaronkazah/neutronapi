@@ -15,7 +15,7 @@ import time
 from typing import Literal
 
 
-_CROCKFORD32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+_CROCKFORD32 = "0123456789abcdefghjkmnpqrstvwxyz"
 
 
 def ulid() -> str:
@@ -50,7 +50,7 @@ def generate_time_sortable_id(kind: Literal["ulid", "uuid7", "auto"] = "auto") -
             import uuid  # type: ignore
 
             if hasattr(uuid, "uuid7"):
-                return str(uuid.uuid7())
+                return str(uuid.uuid7()).lower()
         except Exception:
             pass
     return ulid()

@@ -78,6 +78,13 @@ class Model(metaclass=ModelBase):
                 value = kwargs[name]
                 # Convert enum to its value if needed
                 value = self._convert_enum_value(value)
+                # Use field's from_db method to properly deserialize values from database
+                if hasattr(field, 'from_db') and callable(field.from_db):
+                    try:
+                        value = field.from_db(value)
+                    except Exception:
+                        # If from_db fails, use the raw value
+                        pass
             else:
                 default = getattr(field, 'default', None)
                 value = default() if callable(default) else default
