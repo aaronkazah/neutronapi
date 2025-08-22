@@ -987,3 +987,8 @@ class API:
                 except Exception as e:
                     await send({"type": "lifespan.shutdown.failed", "message": str(e)})
                 break
+
+# Convenience decorator aliases for simpler imports
+# from neutronapi.base import API, endpoint, websocket
+endpoint = API.endpoint
+websocket = API.websocket

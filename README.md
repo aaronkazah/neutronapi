@@ -67,13 +67,13 @@ DATABASES = {
 
 **4. Create API in `apps/posts/api.py`**
 ```python
-from neutronapi.base import API
+from neutronapi.base import API, endpoint
 
 class PostAPI(API):
     resource = "/posts"
     name = "posts"
     
-    @API.endpoint("/", methods=["GET"])
+    @endpoint("/", methods=["GET"])
     async def list_posts(self, scope, receive, send, **kwargs):
         # Access registry dependencies
         logger = self.registry.get('utils:logger')
@@ -82,7 +82,7 @@ class PostAPI(API):
         posts = [{"id": 1, "title": "Hello World"}]
         return await self.response(posts)
     
-    @API.endpoint("/", methods=["POST"])
+    @endpoint("/", methods=["POST"])
     async def create_post(self, scope, receive, send, **kwargs):
         # JSON parser is the default; access body via kwargs
         data = kwargs["body"]  # dict
@@ -179,13 +179,13 @@ NeutronAPI includes full type hints with IDE integration:
 
 ```python
 from typing import Dict, List, Optional
-from neutronapi.base import API, Response
+from neutronapi.base import API, Response, endpoint
 from neutronapi.application import Application
 
 class TypedAPI(API):
     resource = "/api"
     
-    @API.endpoint("/users", methods=["GET"])
+    @endpoint("/users", methods=["GET"])
     async def get_users(self, scope: Dict[str, Any], receive, send) -> Response:
         # Full type support with autocomplete
         cache: CacheService = self.registry.get('services:cache')
@@ -216,7 +216,7 @@ myproject/
 
 ```python
 from neutronapi.background import Task, TaskFrequency
-from neutronapi.base import API
+from neutronapi.base import API, endpoint
 from neutronapi.application import Application
 
 class CleanupTask(Task):
@@ -229,7 +229,7 @@ class CleanupTask(Task):
 class PingAPI(API):
     resource = "/ping"
     
-    @API.endpoint("/", methods=["GET"])
+    @endpoint("/", methods=["GET"])
     async def ping(self, scope, receive, send, **kwargs):
         return await self.response({"status": "ok"})
 
@@ -442,6 +442,9 @@ Notes:
 - `.search("term")` uses `Meta.search_fields` if set; otherwise autodetects text fields.
 - On SQLite, when `Meta.sqlite_fts` is enabled, the provider uses the configured FTS table name for `MATCH` and ranking.
 
+Compatibility
+- Both `@endpoint` and `@API.endpoint` are supported. Use `@endpoint` for brevity.
+
 Basic vs Full‑Text Search
 - Basic search (LIKE/ILIKE): fast to enable; exact substring match only; no stemming or advanced ranking.
 - Full‑text search: tokenized, understands stop words and (in Postgres) stemming; supports relevance ranking and scales better for large text datasets.
@@ -475,7 +478,7 @@ app = Application(
 )
 
 # Endpoint-level middleware
-@API.endpoint("/upload", methods=["POST"], middlewares=[AuthMiddleware()])
+@endpoint("/upload", methods=["POST"], middlewares=[AuthMiddleware()])
 async def upload_file(self, scope, receive, send, **kwargs):
     # This endpoint has auth middleware
     pass
@@ -487,13 +490,13 @@ async def upload_file(self, scope, receive, send, **kwargs):
 from neutronapi.parsers import FormParser, MultiPartParser, BinaryParser
 
 # Default: JSON parser
-@API.endpoint("/api/data", methods=["POST"])
+@endpoint("/api/data", methods=["POST"])
 async def json_data(self, scope, receive, send, **kwargs):
     data = kwargs["body"]  # Parsed JSON dict
     return await self.response({"received": data})
 
 # Custom parsers
-@API.endpoint("/upload", methods=["POST"], parsers=[MultiPartParser(), FormParser()])
+@endpoint("/upload", methods=["POST"], parsers=[MultiPartParser(), FormParser()])
 async def upload_file(self, scope, receive, send, **kwargs):
     files = kwargs["files"]  # Uploaded files
     form_data = kwargs["form"]  # Form fields
@@ -536,7 +539,7 @@ app = Application(
 
 # Usage with type safety
 class OrderAPI(API):
-    @API.endpoint("/orders", methods=["POST"])
+    @endpoint("/orders", methods=["POST"])
     async def create_order(self, scope, receive, send, **kwargs):
         email: EmailServiceProtocol = self.registry.get('services:email')
         metrics: MetricsProtocol = self.registry.get('services:metrics')
@@ -553,7 +556,7 @@ class OrderAPI(API):
 ```python
 from neutronapi.api.exceptions import ValidationError, NotFound, APIException
 
-@API.endpoint("/users/<int:user_id>", methods=["GET"])
+@endpoint("/users/<int:user_id>", methods=["GET"])
 async def get_user(self, scope, receive, send, **kwargs):
     user_id = kwargs["user_id"]
     
@@ -595,7 +598,7 @@ from neutronapi.exceptions import ImproperlyConfigured, ValidationError, ObjectD
 NeutronAPI includes comprehensive OpenAPI 3.0 and Swagger support with automatic spec generation. **Documentation hosting is completely optional and under your control:**
 
 ```python
-from neutronapi.base import API
+from neutronapi.base import API, endpoint
 from neutronapi.application import Application
 from neutronapi.openapi.openapi import OpenAPIGenerator
 from neutronapi.openapi.swagger import SwaggerConverter
@@ -606,7 +609,7 @@ class UserAPI(API):
     description = "User registration and management endpoints"
     tags = ["Users"]
     
-    @API.endpoint("/", methods=["GET"], 
+    @endpoint("/", methods=["GET"], 
                   summary="List all users",
                   description="Retrieve a paginated list of all users",
                   tags=["Users"],
@@ -642,7 +645,7 @@ class UserAPI(API):
         users = [{"id": 1, "name": "John", "email": "john@example.com"}]
         return await self.response({"users": users, "total": 1, "page": page})
     
-    @API.endpoint("/", methods=["POST"],
+    @endpoint("/", methods=["POST"],
                   summary="Create new user",
                   description="Register a new user account",
                   request_schema={
@@ -746,14 +749,14 @@ with open('swagger.json', 'w') as f:
 **Note**: NeutronAPI **never automatically hosts documentation**. You have complete control over where and how to serve your API docs.
 
 ```python
-from neutronapi.base import API
+from neutronapi.base import API, endpoint
 from neutronapi.application import Application
 
 # OPTIONAL: Create a docs API only if you want to self-host documentation
 class DocsAPI(API):
     resource = "/docs"  # You choose the path - could be /api-docs, /documentation, etc.
     
-    @API.endpoint("/openapi.json", methods=["GET"])
+    @endpoint("/openapi.json", methods=["GET"])
     async def openapi_spec(self, scope, receive, send, **kwargs):
         """Serve OpenAPI specification - completely optional endpoint"""
         generator = OpenAPIGenerator(
@@ -764,7 +767,7 @@ class DocsAPI(API):
         spec = await generator.generate_from_application(self.app)
         return await self.response(spec)
     
-    @API.endpoint("/", methods=["GET"])
+    @endpoint("/", methods=["GET"])
     async def swagger_ui(self, scope, receive, send, **kwargs):
         """Serve Swagger UI"""
         html = """
@@ -853,7 +856,7 @@ ERROR_SCHEMA = {
 class AdvancedUserAPI(API):
     resource = "/users"
     
-    @API.endpoint("/<int:user_id>", methods=["GET"],
+    @endpoint("/<int:user_id>", methods=["GET"],
                   summary="Get user by ID",
                   parameters=[
                       {
@@ -939,7 +942,7 @@ with open('public/index.html', 'w') as f:
 class OptionalDocsAPI(API):
     resource = "/internal-docs"  # You control the path
     
-    @API.endpoint("/spec", methods=["GET"])
+    @endpoint("/spec", methods=["GET"])
     async def spec(self, scope, receive, send, **kwargs):
         # Your choice to include this endpoint
         spec = await generator.generate_from_application(self.app)

@@ -280,6 +280,82 @@ class Model(metaclass=ModelBase):
         await db.execute(sql, params if is_pg else tuple(params))
         await db.commit()
 
+    async def delete(self, using: Optional[str] = None):
+        """Delete this model instance from the database."""
+        alias = using or 'default'
+        db = await get_databases().get_connection(alias)
+        is_pg = getattr(db, 'db_type', None) == DatabaseType.POSTGRES
+        schema, table = self._get_parsed_table_name()
+        table_ident = f"{self._quote(schema)}.{self._quote(table)}" if is_pg else self._quote(f"{schema}_{table}")
+        
+        # Get primary key
+        pk_fields = [name for name, f in self._fields.items() if getattr(f, 'primary_key', False)]
+        if len(pk_fields) != 1:
+            raise ValueError("Cannot delete without exactly one primary key field.")
+        
+        pk_name = pk_fields[0]
+        pk_value = getattr(self, pk_name, None)
+        if pk_value in (None, ""):
+            raise ValueError("Cannot delete without a primary key value.")
+        
+        # Execute DELETE
+        placeholder = "$1" if is_pg else "?"
+        sql = f"DELETE FROM {table_ident} WHERE {self._quote(pk_name)} = {placeholder}"
+        result = await db.execute(sql, [pk_value] if is_pg else (pk_value,))
+        await db.commit()
+        
+        # Clear the primary key to indicate this instance is no longer in the database
+        setattr(self, pk_name, None)
+
+    async def refresh_from_db(self, fields=None, using: Optional[str] = None):
+        """Reload field values from the database."""
+        pk_fields = [name for name, f in self._fields.items() if getattr(f, 'primary_key', False)]
+        if len(pk_fields) != 1:
+            raise ValueError("Cannot refresh without exactly one primary key field.")
+        
+        pk_name = pk_fields[0]
+        pk_value = getattr(self, pk_name, None)
+        if pk_value in (None, ""):
+            raise ValueError("Cannot refresh without a primary key value.")
+        
+        # Use QuerySet to get fresh data
+        qs = QuerySet(self.__class__)
+        if using:
+            qs = qs.using(using)
+        
+        try:
+            fresh_instance = await qs.get(**{pk_name: pk_value})
+        except self.__class__.DoesNotExist:
+            raise self.__class__.DoesNotExist(f"{self.__class__.__name__} matching query does not exist.")
+        
+        # Update only requested fields or all fields
+        if fields:
+            for field_name in fields:
+                if field_name in self._fields:
+                    setattr(self, field_name, getattr(fresh_instance, field_name))
+        else:
+            for field_name in self._fields:
+                setattr(self, field_name, getattr(fresh_instance, field_name))
+
+    def get_absolute_url(self):
+        """Return the absolute URL for this object."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} doesn't define a get_absolute_url() method. "
+            "You must define this method to use this feature."
+        )
+
+    def __str__(self):
+        """Return a human-readable representation of the model."""
+        pk_fields = [name for name, f in self._fields.items() if getattr(f, 'primary_key', False)]
+        if pk_fields:
+            pk_value = getattr(self, pk_fields[0], None)
+            return f"{self.__class__.__name__} object ({pk_value})"
+        return f"{self.__class__.__name__} object"
+
+    def __repr__(self):
+        """Return a detailed representation of the model."""
+        return f"<{self.__class__.__name__}: {self.__str__()}>"
+
     @classproperty  
     def objects(cls):
         """Return a QuerySet bound to the model's table."""
