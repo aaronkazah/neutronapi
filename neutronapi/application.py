@@ -10,7 +10,7 @@ T = TypeVar('T')
 RegistryValue = TypeVar('RegistryValue')
 
 from neutronapi.base import API, Response
-from neutronapi import exceptions
+from neutronapi.api import exceptions
 from neutronapi.middleware.cors import CORS
 from neutronapi.middleware.routing import RoutingMiddleware
 from neutronapi.middleware.allowed_hosts import AllowedHostsMiddleware
