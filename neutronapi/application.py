@@ -104,9 +104,11 @@ class Application:
             >>> logger = self.registry.get('utils:logger')
             >>> email = self.registry.get('services:email')
         """
-        # Convert provided APIs (list or dict) into internal {resource: api} mapping
+        # Convert provided APIs into two mappings: name-based and resource-based
         from neutronapi.base import API
-        self.apis: Dict[str, 'API'] = {}
+        self.apis: Dict[str, 'API'] = {}  # name -> api (for reverse lookups)
+        self._resource_apis: Dict[str, 'API'] = {}  # resource -> api (for routing)
+        
         if apis:
             if isinstance(apis, dict):
                 # Use the provided names from the dict
@@ -117,6 +119,7 @@ class Application:
                     if resource is None:
                         raise ValueError(f"API {api.__class__.__name__} must define a non-null 'resource'")
                     self.apis[name] = api
+                    self._resource_apis[resource] = api
             else:
                 # For list[API], use the API name as the key for reverse lookups
                 for api in apis:
@@ -131,6 +134,7 @@ class Application:
                         raise ValueError(f"API {api.__class__.__name__} must have a 'name' attribute for reverse lookups")
                     
                     self.apis[api.name] = api
+                    self._resource_apis[resource] = api
         
         # Validate no duplicate route names across all APIs
         self._validate_unique_route_names()
@@ -158,13 +162,13 @@ class Application:
                 path = scope.get("path", "/")
 
                 # Check if path matches any API exactly
-                if path in self.apis:
-                    api = self.apis[path]
+                if path in self._resource_apis:
+                    api = self._resource_apis[path]
                     await api.handle(scope, receive, send)
                     return
 
                 # Check if path starts with any API prefix
-                for api_path, api in self.apis.items():
+                for api_path, api in self._resource_apis.items():
                     if path.startswith(api_path):
                         await api.handle(scope, receive, send)
                         return

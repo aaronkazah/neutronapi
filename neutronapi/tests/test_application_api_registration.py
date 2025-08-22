@@ -26,11 +26,17 @@ class TestApplicationAPIRegistration(unittest.TestCase):
         
         app = Application(apis=[auth_api, users_api])
         
-        # Check that APIs are registered with their name as key
+        # Check that APIs are registered with their name as key (for reverse lookups)
         self.assertIn("auth", app.apis)
         self.assertIn("users", app.apis)
         self.assertEqual(app.apis["auth"], auth_api)
         self.assertEqual(app.apis["users"], users_api)
+        
+        # Check that APIs are also registered with their resource path (for routing)
+        self.assertIn("/v1/auth", app._resource_apis)
+        self.assertIn("/v1/users", app._resource_apis)
+        self.assertEqual(app._resource_apis["/v1/auth"], auth_api)
+        self.assertEqual(app._resource_apis["/v1/users"], users_api)
 
     def test_reverse_lookup_with_api_name(self):
         """Test that reverse lookup works with API name."""
@@ -78,11 +84,17 @@ class TestApplicationAPIRegistration(unittest.TestCase):
             "users": users_api
         })
         
-        # Check that APIs are registered with provided keys
+        # Check that APIs are registered with provided keys (for reverse lookups)
         self.assertIn("auth", app.apis)
         self.assertIn("users", app.apis)
         self.assertEqual(app.apis["auth"], auth_api)
         self.assertEqual(app.apis["users"], users_api)
+        
+        # Check that APIs are also registered with their resource path (for routing)
+        self.assertIn("/v1/auth", app._resource_apis)
+        self.assertIn("/v1/users", app._resource_apis)
+        self.assertEqual(app._resource_apis["/v1/auth"], auth_api)
+        self.assertEqual(app._resource_apis["/v1/users"], users_api)
 
     def test_reverse_lookup_with_dict_apis(self):
         """Test reverse lookup works with dict-based registration."""
