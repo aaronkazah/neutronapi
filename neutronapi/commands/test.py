@@ -356,7 +356,16 @@ class Command:
             def add_target(target: str):
                 # If target is an app label (directory in apps/ or 'core')
                 if os.path.isdir(os.path.join("apps", target, "tests")):
-                    discovered = loader.discover(os.path.join("apps", target, "tests"), pattern="test_*.py")
+                    # Add the apps directory to sys.path so nested test modules can be imported
+                    apps_dir = "apps"
+                    if apps_dir not in sys.path:
+                        sys.path.insert(0, apps_dir)
+                    # Start discovery from apps directory with proper top_level_dir
+                    discovered = loader.discover(
+                        start_dir=os.path.join("apps", target, "tests"),
+                        pattern="test_*.py",
+                        top_level_dir="apps"
+                    )
                     suite.addTests(discovered)
                     return
                 if target == "core" and (os.path.isdir("core/tests") or os.path.isdir("neutronapi/tests")):
@@ -388,6 +397,11 @@ class Command:
                     test_dirs.append("neutronapi/tests")
 
                 if os.path.isdir("apps"):
+                    # Add apps to sys.path for proper module resolution
+                    apps_dir = "apps"
+                    if apps_dir not in sys.path:
+                        sys.path.insert(0, apps_dir)
+                    
                     for app_name in os.listdir("apps"):
                         app_tests_dir = os.path.join("apps", app_name, "tests")
                         if os.path.isdir(app_tests_dir):
@@ -395,7 +409,11 @@ class Command:
 
                 if test_dirs:
                     for test_dir in test_dirs:
-                        discovered = loader.discover(test_dir, pattern="test_*.py")
+                        # Use proper top_level_dir for apps
+                        if test_dir.startswith("apps"):
+                            discovered = loader.discover(test_dir, pattern="test_*.py", top_level_dir="apps")
+                        else:
+                            discovered = loader.discover(test_dir, pattern="test_*.py")
                         suite.addTests(discovered)
                 else:
                     suite = loader.discover(".", pattern="test_*.py")

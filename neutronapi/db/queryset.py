@@ -347,7 +347,9 @@ class QuerySet(Generic[T]):
         return 0
 
     async def exists(self) -> bool:
-        qs = self.values('key').limit(1)
+        qs = self._clone()
+        qs._select_fields = ["1"]  # Just select a literal 1, no field assumptions
+        qs._limit_count = 1
         result = await qs.first()
         return result is not None
 

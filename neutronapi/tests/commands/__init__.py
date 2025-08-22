@@ -1,1 +1,1 @@
-# Commands tests
+# Test commands module
