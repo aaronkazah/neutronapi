@@ -108,15 +108,27 @@ class Application:
         from neutronapi.base import API
         self.apis: Dict[str, 'API'] = {}
         if apis:
-            # Support both list[API] and dict[str, API]
-            api_iterable = apis.values() if isinstance(apis, dict) else apis
-            for api in api_iterable:
-                if not hasattr(api, 'resource'):
-                    raise ValueError(f"API {api.__class__.__name__} must have a 'resource' attribute")
-                resource = getattr(api, 'resource', None)
-                if resource is None:
-                    raise ValueError(f"API {api.__class__.__name__} must define a non-null 'resource'")
-                self.apis[resource] = api
+            if isinstance(apis, dict):
+                # Use the provided names from the dict
+                for name, api in apis.items():
+                    if not hasattr(api, 'resource'):
+                        raise ValueError(f"API {api.__class__.__name__} must have a 'resource' attribute")
+                    resource = getattr(api, 'resource', None)
+                    if resource is None:
+                        raise ValueError(f"API {api.__class__.__name__} must define a non-null 'resource'")
+                    self.apis[name] = api
+            else:
+                # For list[API], use the resource as the key (fallback behavior)
+                for api in apis:
+                    if not hasattr(api, 'resource'):
+                        raise ValueError(f"API {api.__class__.__name__} must have a 'resource' attribute")
+                    resource = getattr(api, 'resource', None)
+                    if resource is None:
+                        raise ValueError(f"API {api.__class__.__name__} must define a non-null 'resource'")
+                    self.apis[resource] = api
+        
+        # Validate no duplicate route names across all APIs
+        self._validate_unique_route_names()
 
         self.version = version
 
@@ -328,6 +340,65 @@ class Application:
         
         prefix = f"{namespace}:"
         return [key for key in self.registry.keys() if key.startswith(prefix)]
+
+    def _validate_unique_route_names(self) -> None:
+        """Validate that there are no duplicate route names across all APIs.
+        
+        Route names are in the format "api_name:endpoint_name".
+        
+        Raises:
+            ValueError: If duplicate route names are found
+        """
+        seen_routes = {}  # route_name -> api_name
+        
+        for api_name, api in self.apis.items():
+            # Get all route names from this API
+            for route_tuple in api.routes:
+                # Route tuple structure: (pattern, handler, methods, permissions, throttles, route_name, original_path, ...)
+                if len(route_tuple) >= 6:
+                    route_name = route_tuple[5]  # route_name is at index 5
+                    if route_name:  # Only check named routes
+                        full_route_name = f"{api_name}:{route_name}"
+                        
+                        if full_route_name in seen_routes:
+                            raise ValueError(
+                                f"Duplicate route name '{full_route_name}' found. "
+                                f"Route names must be unique across all APIs. "
+                                f"Previously defined in API '{seen_routes[full_route_name]}', "
+                                f"now found again in API '{api_name}'."
+                            )
+                        
+                        seen_routes[full_route_name] = api_name
+
+    def reverse(self, name: str, **kwargs) -> str:
+        """Reverse URL lookup for a named route across all registered APIs.
+        
+        Args:
+            name: Route name in format "api_name:endpoint_name"
+            **kwargs: Parameters to substitute in the URL
+            
+        Returns:
+            The reversed URL string
+            
+        Raises:
+            ValueError: If API not found or invalid name format
+            
+        Example:
+            >>> app = Application(apis={"users": users_api})
+            >>> url = app.reverse("users:detail", user_id=123)
+            >>> # Returns: "/users/123"
+        """
+        if ":" not in name:
+            raise ValueError(
+                f"Route name '{name}' must be in format 'api_name:endpoint_name'. "
+                f"Example: 'users:detail'"
+            )
+        
+        api_name, endpoint_name = name.split(":", 1)
+        if api_name not in self.apis:
+            raise ValueError(f"API '{api_name}' not found.")
+        
+        return self.apis[api_name].reverse(endpoint_name, **kwargs)
 
     async def __call__(self, scope, receive, send, **kwargs):
         return await self.app(scope, receive, send, **kwargs)
