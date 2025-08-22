@@ -279,179 +279,37 @@ black neutronapi
 flake8 neutronapi
 ```
 
-## Full-Text Search (FTS)
+## Database Features
 
-NeutronAPI provides database-specific full-text search with a unified API:
-
-- PostgreSQL: native FTS via `to_tsvector`/`plainto_tsquery` (+ optional ranking with `ts_rank`).
-- SQLite: FTS5 virtual tables when configured, with `MATCH` (+ optional ranking with `bm25`).
-- Fallback: case-insensitive `LIKE` across text fields if FTS is not configured.
-
-### Usage
-
-```python
-# Search across all text fields
-await MyModel.objects.search("cheese")
-
-# Search specific fields
-await MyModel.objects.search("cheese", "title", "body")
-
-# Field-specific lookup
-await MyModel.objects.filter(body__search="cheese")
-
-# Order by rank (Postgres ts_rank, SQLite FTS5 bm25)
-await MyModel.objects.search("cheese").order_by_rank()
-```
-
-### SQLite (FTS5) Setup
-
-SQLite requires an FTS5 virtual table that mirrors the searchable text columns of your base table and keeps `rowid` aligned. Enable FTS in settings (empty dict uses the default `<table>_fts` name):
-
-```python
-DATABASES = {
-  'default': {
-    'ENGINE': 'aiosqlite',
-    'NAME': 'db.sqlite3',
-    'OPTIONS': {
-      'FTS': {},  # or {'table': 'my_table_fts'} to override name
-    }
-  }
-}
-```
-
-You must create the FTS table and keep it in sync. A simple pattern:
-
-```sql
-CREATE VIRTUAL TABLE IF NOT EXISTS "app_model_fts" USING fts5(title, body, content='app_model', content_rowid='rowid');
-
--- Optional triggers to keep FTS in sync
-CREATE TRIGGER IF NOT EXISTS app_model_ai AFTER INSERT ON app_model BEGIN
-  INSERT INTO app_model_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
-END;
-CREATE TRIGGER IF NOT EXISTS app_model_ad AFTER DELETE ON app_model BEGIN
-  INSERT INTO app_model_fts(app_model_fts, rowid, title, body) VALUES('delete', old.rowid, old.title, old.body);
-END;
-CREATE TRIGGER IF NOT EXISTS app_model_au AFTER UPDATE ON app_model BEGIN
-  INSERT INTO app_model_fts(app_model_fts, rowid, title, body) VALUES('delete', old.rowid, old.title, old.body);
-  INSERT INTO app_model_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
-END;
-```
-
-With FTS5 active, `search()` uses `MATCH` and `order_by_rank()` uses `bm25` for ranking.
-
-### PostgreSQL FTS Setup
-
-PostgreSQL works out of the box computing `to_tsvector` on the fly, but for performance you should persist a `tsvector` column and add a GIN index:
-
-```sql
--- Example for table app_model (columns: title, body)
-ALTER TABLE app_model ADD COLUMN IF NOT EXISTS search_vector tsvector;
-UPDATE app_model SET search_vector = to_tsvector('english', coalesce(title,'') || ' ' || coalesce(body,''));
-CREATE INDEX IF NOT EXISTS idx_app_model_search_vector ON app_model USING GIN (search_vector);
-
--- Keep vector up to date
-CREATE FUNCTION app_model_tsvector_update() RETURNS trigger AS $$
-BEGIN
-  NEW.search_vector := to_tsvector('english', coalesce(NEW.title,'') || ' ' || coalesce(NEW.body,''));
-  RETURN NEW;
-END
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS app_model_tsvector_update ON app_model;
-CREATE TRIGGER app_model_tsvector_update BEFORE INSERT OR UPDATE ON app_model
-FOR EACH ROW EXECUTE FUNCTION app_model_tsvector_update();
-```
-
-Language configuration can be set via settings:
-
-```python
-DATABASES = {
-  'default': {
-    'ENGINE': 'asyncpg',
-    'NAME': 'mydb',
-    'OPTIONS': {
-      'TSVECTOR_CONFIG': 'english',  # affects to_tsvector/plainto_tsquery
-    }
-  }
-}
-```
-
-### Vector column (`vec`)
-
-The default schema includes a `vec` column for vector embeddings used by semantic vector search (e.g., cosine similarity). This is separate from full‑text search. NeutronAPI supports both:
-
-- Keyword search: `search()` and `__search` use DB-native full-text search.
-- Semantic search: `vector_search()` uses the `vec` embedding column. You can populate it with model embeddings and run nearest-neighbor queries.
-
-FTS is suitable for precise keyword queries; semantic vector search targets meaning/similarity. They can be combined in applications.
-
-### Tutorial: End-to-end Examples
-
-Below are minimal, end-to-end steps to enable and use full‑text search for each database.
-
-PostgreSQL (native FTS)
-- Configure DB engine: set `ENGINE: 'asyncpg'` in `DATABASES['default']`.
-- Optional language: set `OPTIONS['TSVECTOR_CONFIG'] = 'english'` for stemming/stop words.
-- Create your model with text fields (e.g., `title`, `body`) and run migrations.
-- Insert data, then query:
-  - Single field: `await Post.objects.filter(title__search='the middle')`
-  - Multiple fields: `await Post.objects.search('pony', 'title', 'body')`
-  - Rank by relevance: `await Post.objects.search('pony').order_by_rank()`
-- Performance (optional): persist a `tsvector` + GIN index as shown above; this speeds up repeated searches.
-
-SQLite (FTS5)
-- Configure DB engine: set `ENGINE: 'aiosqlite'`.
-- Enable FTS5 mode: set `OPTIONS['FTS'] = {}` (or `{'table': '<name>'}` to override the default `<table>_fts`).
-- Create your model and run migrations.
-- Create the FTS virtual table mirroring searchable columns (see SQL above) and, ideally, add triggers to keep it in sync.
-- Insert data, then query:
-  - Single field: `await Post.objects.filter(title__search='the middle')`
-  - Multiple fields: `await Post.objects.search('pony', 'title', 'body')`
-  - Rank by relevance: `await Post.objects.search('pony').order_by_rank()` (uses `bm25`)
-- Notes: FTS5 provides fast text search with tokenization and stop-word handling; stemming requires specific tokenizers and may vary by build.
-
-### Model Meta: Configuration
-
-Model options can configure search defaults without changing queries:
-
+### Models & ORM
 ```python
 from neutronapi.db.models import Model
-from neutronapi.db.fields import CharField, TextField
+from neutronapi.db.fields import CharField, IntegerField, DateTimeField
 
 class Post(Model):
-    title = CharField()
-    body = TextField()
+    title = CharField(max_length=200)
+    content = TextField()
+    created_at = DateTimeField(auto_now_add=True)
 
-    class Meta:
-        # Default fields to search when none are provided to .search()
-        search_fields = ("title", "body")
-
-        # PostgreSQL: choose stemming/stop-word config (optional)
-        search_config = "english"
-
-        # PostgreSQL ranking weights (optional): A > B > C > D
-        search_weights = {"title": "A", "body": "B"}
-
-        # SQLite: enable FTS5 and/or override FTS table name
-        # True -> use default "<base_table>_fts"; or provide a dict with 'table'
-        sqlite_fts = True  # or {"table": "posts_fts"}
+# Basic queries
+await Post.objects.all()
+await Post.objects.filter(title="My Post")
+await Post.objects.create(title="New Post", content="...")
 ```
 
-Notes:
-- `.filter(body__search="term")` always targets the specific field.
-- `.search("term")` uses `Meta.search_fields` if set; otherwise autodetects text fields.
-- On SQLite, when `Meta.sqlite_fts` is enabled, the provider uses the configured FTS table name for `MATCH` and ranking.
+### Full-Text Search
+```python
+# Search across text fields
+await Post.objects.search("python framework")
 
-Compatibility
-- Both `@endpoint` and `@API.endpoint` are supported. Use `@endpoint` for brevity.
+# Field-specific search
+await Post.objects.filter(content__search="database")
 
-Basic vs Full‑Text Search
-- Basic search (LIKE/ILIKE): fast to enable; exact substring match only; no stemming or advanced ranking.
-- Full‑text search: tokenized, understands stop words and (in Postgres) stemming; supports relevance ranking and scales better for large text datasets.
+# Ranked results (PostgreSQL/SQLite FTS5)
+await Post.objects.search("api").order_by_rank()
+```
 
-FAQ: Do I need embeddings for FTS?
-- No. PostgreSQL full‑text search uses its own `tsvector` representation and does not require or use embedding vectors.
-- Embedding vectors in the `vec` column are for semantic similarity search via `vector_search()` and are independent of FTS.
+Supports PostgreSQL native FTS and SQLite FTS5 with automatic fallback to LIKE queries.
 
 
 ## Commands
@@ -593,413 +451,41 @@ from neutronapi.openapi.exceptions import InvalidSchemaError
 from neutronapi.exceptions import ImproperlyConfigured, ValidationError, ObjectDoesNotExist
 ```
 
-## OpenAPI & Swagger Documentation
+## OpenAPI Documentation
 
-NeutronAPI includes comprehensive OpenAPI 3.0 and Swagger support with automatic spec generation. **Documentation hosting is completely optional and under your control:**
+Generate OpenAPI 3.0 specifications from your code:
 
 ```python
-from neutronapi.base import API, endpoint
-from neutronapi.application import Application
 from neutronapi.openapi.openapi import OpenAPIGenerator
-from neutronapi.openapi.swagger import SwaggerConverter
 
+# Add documentation to endpoints
 class UserAPI(API):
     resource = "/users"
-    title = "User Management"
-    description = "User registration and management endpoints"
-    tags = ["Users"]
+    name = "users"
     
     @endpoint("/", methods=["GET"], 
-                  summary="List all users",
-                  description="Retrieve a paginated list of all users",
-                  tags=["Users"],
-                  response_schema={
-                      "type": "object",
-                      "properties": {
-                          "users": {
-                              "type": "array",
-                              "items": {
-                                  "type": "object",
-                                  "properties": {
-                                      "id": {"type": "integer"},
-                                      "name": {"type": "string"},
-                                      "email": {"type": "string", "format": "email"}
-                                  }
-                              }
-                          },
-                          "total": {"type": "integer"},
-                          "page": {"type": "integer"}
-                      }
-                  },
-                  parameters=[
-                      {
-                          "name": "page",
-                          "in": "query",
-                          "description": "Page number",
-                          "required": False,
-                          "schema": {"type": "integer", "default": 1}
-                      }
-                  ])
+              summary="List users",
+              response_schema={
+                  "type": "object",
+                  "properties": {
+                      "users": {"type": "array"},
+                      "total": {"type": "integer"}
+                  }
+              })
     async def list_users(self, scope, receive, send, **kwargs):
-        page = int(kwargs.get('params', {}).get('page', 1))
-        users = [{"id": 1, "name": "John", "email": "john@example.com"}]
-        return await self.response({"users": users, "total": 1, "page": page})
-    
-    @endpoint("/", methods=["POST"],
-                  summary="Create new user",
-                  description="Register a new user account",
-                  request_schema={
-                      "type": "object",
-                      "required": ["name", "email"],
-                      "properties": {
-                          "name": {"type": "string", "minLength": 2},
-                          "email": {"type": "string", "format": "email"},
-                          "age": {"type": "integer", "minimum": 13}
-                      }
-                  },
-                  response_schema={
-                      "type": "object",
-                      "properties": {
-                          "id": {"type": "integer"},
-                          "name": {"type": "string"},
-                          "email": {"type": "string"},
-                          "created_at": {"type": "string", "format": "date-time"}
-                      }
-                  },
-                  responses={
-                      400: {
-                          "description": "Validation error",
-                          "schema": {
-                              "type": "object",
-                              "properties": {
-                                  "error": {"type": "string"}
-                              }
-                          }
-                      }
-                  })
-    async def create_user(self, scope, receive, send, **kwargs):
-        data = kwargs["body"]
-        user = {"id": 123, "name": data["name"], "email": data["email"], "created_at": "2023-01-01T00:00:00Z"}
-        return await self.response(user, status_code=201)
+        return await self.response({"users": [], "total": 0})
 
-app = Application(apis=[UserAPI()])
-```
-
-### Generate OpenAPI Specification
-
-```python
-import asyncio
-from neutronapi.openapi.openapi import OpenAPIGenerator
-
-# Generate from entire application
+# Generate specification
 async def generate_docs():
-    generator = OpenAPIGenerator(
-        title="My API",
-        description="A comprehensive REST API built with NeutronAPI",
-        version="1.0.0",
-        servers=[
-            {"url": "https://api.example.com", "description": "Production server"},
-            {"url": "https://staging-api.example.com", "description": "Staging server"}
-        ],
-        contact={
-            "name": "API Support",
-            "url": "https://example.com/support",
-            "email": "support@example.com"
-        },
-        license_info={
-            "name": "MIT",
-            "url": "https://opensource.org/licenses/MIT"
-        }
-    )
-    
-    # Generate from Application instance
-    openapi_spec = await generator.generate_from_application(app)
-    
-    # Generate from individual API
-    user_api_spec = await generator.generate_from_api(UserAPI())
-    
-    # Save to file
     import json
-    with open('openapi.json', 'w') as f:
-        json.dump(openapi_spec, f, indent=2)
-    
-    return openapi_spec
-
-# Run the generator
-spec = asyncio.run(generate_docs())
-print("OpenAPI spec generated!")
-```
-
-### Convert to Swagger 2.0
-
-```python
-from neutronapi.openapi.swagger import SwaggerConverter
-
-# Convert OpenAPI 3.0 to Swagger 2.0 for legacy compatibility
-converter = SwaggerConverter()
-swagger_spec = converter.convert_openapi_to_swagger(openapi_spec)
-
-# Save Swagger spec
-with open('swagger.json', 'w') as f:
-    json.dump(swagger_spec, f, indent=2)
-```
-
-### Optional: Serve Interactive Documentation
-
-**Note**: NeutronAPI **never automatically hosts documentation**. You have complete control over where and how to serve your API docs.
-
-```python
-from neutronapi.base import API, endpoint
-from neutronapi.application import Application
-
-# OPTIONAL: Create a docs API only if you want to self-host documentation
-class DocsAPI(API):
-    resource = "/docs"  # You choose the path - could be /api-docs, /documentation, etc.
-    
-    @endpoint("/openapi.json", methods=["GET"])
-    async def openapi_spec(self, scope, receive, send, **kwargs):
-        """Serve OpenAPI specification - completely optional endpoint"""
-        generator = OpenAPIGenerator(
-            title="My API Documentation",
-            description="Auto-generated API documentation",
-            version="1.0.0"
-        )
-        spec = await generator.generate_from_application(self.app)
-        return await self.response(spec)
-    
-    @endpoint("/", methods=["GET"])
-    async def swagger_ui(self, scope, receive, send, **kwargs):
-        """Serve Swagger UI"""
-        html = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>API Documentation</title>
-            <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@3.52.5/swagger-ui.css" />
-        </head>
-        <body>
-            <div id="swagger-ui"></div>
-            <script src="https://unpkg.com/swagger-ui-dist@3.52.5/swagger-ui-bundle.js"></script>
-            <script>
-                SwaggerUIBundle({
-                    url: '/docs/openapi.json',
-                    dom_id: '#swagger-ui',
-                    presets: [
-                        SwaggerUIBundle.presets.apis,
-                        SwaggerUIBundle.presets.standalone
-                    ]
-                });
-            </script>
-        </body>
-        </html>
-        """
-        return await self.response(html, headers=[(b"content-type", b"text/html")])
-
-# COMPLETELY OPTIONAL: Only add DocsAPI if you want self-hosted docs
-app = Application(
-    apis=[
-        UserAPI(),
-        DocsAPI()  # Only include this if you want docs at /docs
-    ]
-)
-
-# Alternative: Generate specs for external hosting (recommended for production)
-async def export_specs():
     generator = OpenAPIGenerator(title="My API", version="1.0.0")
     spec = await generator.generate_from_application(app)
     
-    # Export to file for external hosting (Postman, Insomnia, etc.)
-    with open('api-spec.json', 'w') as f:
+    with open('openapi.json', 'w') as f:
         json.dump(spec, f, indent=2)
-    
-    # Or upload to external documentation service
-    # await upload_to_readme_io(spec)
-    # await upload_to_postman(spec)
+
+# Use with external documentation tools (Swagger UI, Postman, etc.)
 ```
-
-### Advanced Schema Patterns
-
-```python
-# Reusable schema components
-USER_SCHEMA = {
-    "type": "object",
-    "required": ["name", "email"],
-    "properties": {
-        "id": {"type": "integer", "description": "Unique user identifier"},
-        "name": {"type": "string", "minLength": 2, "maxLength": 100},
-        "email": {"type": "string", "format": "email"},
-        "age": {"type": "integer", "minimum": 13, "maximum": 120},
-        "created_at": {"type": "string", "format": "date-time"},
-        "profile": {
-            "type": "object",
-            "properties": {
-                "bio": {"type": "string", "maxLength": 500},
-                "avatar_url": {"type": "string", "format": "uri"}
-            }
-        }
-    }
-}
-
-ERROR_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "error": {
-            "type": "object",
-            "properties": {
-                "type": {"type": "string"},
-                "message": {"type": "string"}
-            }
-        }
-    }
-}
-
-class AdvancedUserAPI(API):
-    resource = "/users"
-    
-    @endpoint("/<int:user_id>", methods=["GET"],
-                  summary="Get user by ID",
-                  parameters=[
-                      {
-                          "name": "user_id",
-                          "in": "path",
-                          "required": True,
-                          "schema": {"type": "integer"},
-                          "description": "User ID"
-                      },
-                      {
-                          "name": "include",
-                          "in": "query",
-                          "schema": {
-                              "type": "array",
-                              "items": {"type": "string", "enum": ["profile", "posts"]}
-                          },
-                          "description": "Additional data to include"
-                      }
-                  ],
-                  response_schema=USER_SCHEMA,
-                  responses={
-                      404: {"description": "User not found", "schema": ERROR_SCHEMA}
-                  })
-    async def get_user(self, scope, receive, send, **kwargs):
-        user_id = kwargs["user_id"]
-        # Your logic here
-        return await self.response({"id": user_id, "name": "John", "email": "john@example.com"})
-```
-
-## Documentation Deployment Options
-
-NeutronAPI gives you **complete control** over how to deploy your API documentation:
-
-### 1. **External Documentation Services** (Recommended)
-```python
-# Generate spec for external hosting
-spec = await generator.generate_from_application(app)
-
-# Popular external documentation platforms:
-# - readme.io
-# - GitBook
-# - Postman Documentation
-# - Insomnia Documentation
-# - Stoplight
-# - SwaggerHub
-```
-
-### 2. **Static File Hosting**
-```python
-# Generate static files for CDN/static hosting
-import json
-
-spec = await generator.generate_from_application(app)
-
-# Save for static hosting (GitHub Pages, Netlify, etc.)
-with open('public/openapi.json', 'w') as f:
-    json.dump(spec, f)
-
-# Generate static Swagger UI
-swagger_html = f"""
-<!DOCTYPE html>
-<html>
-<head><title>API Docs</title></head>
-<body>
-    <div id="swagger-ui"></div>
-    <script src="https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js"></script>
-    <script>
-        SwaggerUIBundle({{
-            url: './openapi.json',
-            dom_id: '#swagger-ui'
-        }});
-    </script>
-</body>
-</html>
-"""
-with open('public/index.html', 'w') as f:
-    f.write(swagger_html)
-```
-
-### 3. **Self-Hosted (Optional)**
-```python
-# Only if you want to serve docs from your API server
-class OptionalDocsAPI(API):
-    resource = "/internal-docs"  # You control the path
-    
-    @endpoint("/spec", methods=["GET"])
-    async def spec(self, scope, receive, send, **kwargs):
-        # Your choice to include this endpoint
-        spec = await generator.generate_from_application(self.app)
-        return await self.response(spec)
-
-# Add only if you explicitly want self-hosted docs
-app = Application(
-    apis=[
-        UserAPI(),
-        # OptionalDocsAPI()  # Uncomment only if desired
-    ]
-)
-```
-
-### 4. **CI/CD Integration**
-```python
-# Example: GitHub Actions workflow
-# .github/workflows/docs.yml
-"""
-name: Generate API Docs
-on: [push]
-jobs:
-  docs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Generate OpenAPI spec
-        run: |
-          python -c "
-          import asyncio
-          from your_app import app
-          from neutronapi.openapi.openapi import OpenAPIGenerator
-          
-          async def generate():
-              gen = OpenAPIGenerator(title='My API', version='1.0.0')
-              spec = await gen.generate_from_application(app)
-              with open('openapi.json', 'w') as f:
-                  json.dump(spec, f, indent=2)
-          
-          asyncio.run(generate())
-          "
-      - name: Deploy to documentation service
-        run: |
-          # Upload to your chosen documentation platform
-          curl -X POST https://api.readme.io/api/v1/api-specification \
-            -H "authorization: Basic $README_API_KEY" \
-            -F "spec=@openapi.json"
-"""
-```
-
-## Key Principles
-
-- **🔒 No Magic**: Documentation hosting is explicit and optional
-- **🎯 Developer Control**: You choose where and how to serve docs  
-- **📋 Spec Generation**: Automatic OpenAPI generation from your code
-- **🔄 Multiple Formats**: OpenAPI 3.0, Swagger 2.0, and custom exports
-- **🚀 External Integration**: Works with all major documentation platforms
 
 ## Why NeutronAPI?
 
