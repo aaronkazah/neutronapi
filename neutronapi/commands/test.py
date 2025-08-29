@@ -221,22 +221,7 @@ class Command:
             print(self.handle.__doc__)
             return
 
-        # No project-specific env flags; keep behavior generic
-
-        # Bootstrap test databases
-        provider_env = os.getenv('DATABASE_PROVIDER', '').lower().strip()
-        if provider_env in ('asyncpg', 'postgres', 'postgresql'):
-            print('Bootstrapping PostgreSQL test database...')
-            try:
-                success = await self._bootstrap_postgres()
-            except Exception:
-                success = False
-            if not success:
-                print('Failed to bootstrap PostgreSQL, falling back to SQLite')
-                self._bootstrap_sqlite()
-        else:
-            print('Bootstrapping SQLite in-memory test database...')
-            self._bootstrap_sqlite()
+        # Use existing database configuration - no custom bootstrapping needed
 
         # Apply project migrations (if any) using the file-based tracker
         async def apply_project_migrations():
@@ -340,7 +325,10 @@ class Command:
                 else:
                     filtered_args.append(a)
 
-            runner = unittest.TextTestRunner(verbosity=verbosity, stream=sys.stderr)
+            # Force unbuffered output for real-time test results
+            sys.stdout.reconfigure(line_buffering=True)
+            sys.stderr.reconfigure(line_buffering=True)
+            runner = unittest.TextTestRunner(verbosity=verbosity, stream=sys.stderr, buffer=False)
             suite = unittest.TestSuite()
 
             # Start coverage if requested or env flag set
@@ -454,12 +442,23 @@ class Command:
                         cov.html_report(directory='htmlcov')
             except Exception as e:
                 print(f"Warning: coverage reporting failed: {e}")
-            await self.run_forced_shutdown()
+            
+            # Cleanup with timeout
+            try:
+                await asyncio.wait_for(self.run_forced_shutdown(), timeout=3.0)
+            except asyncio.TimeoutError:
+                print("Warning: Database cleanup timed out")
+            except Exception as e:
+                print(f"Warning: Database cleanup failed: {e}")
+            
             # Best-effort: stop ephemeral postgres if we started it
             try:
-                await self._teardown_postgres()
+                await asyncio.wait_for(self._teardown_postgres(), timeout=3.0)
+            except asyncio.TimeoutError:
+                print("Warning: PostgreSQL cleanup timed out")
             except Exception:
                 pass
+                
             # Default: hard-exit to ensure full shutdown (no lingering loops/threads)
             # For programmatic callers/tests, set NEUTRONAPI_TEST_RETURN=1 to receive the code instead.
             if os.getenv('NEUTRONAPI_TEST_RETURN', '0') == '1':

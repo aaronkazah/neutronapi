@@ -7,6 +7,7 @@ from neutronapi.application import Application
 class TestEndpointAlias(unittest.IsolatedAsyncioTestCase):
     async def test_alias_decorator_registers_route(self):
         class HelloAPI(API):
+            name = "hello"
             resource = "/hello"
 
             @endpoint("/", methods=["GET"])

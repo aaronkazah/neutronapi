@@ -6,6 +6,7 @@ from neutronapi.application import Application
 
 
 class PingAPI(API):
+    name = "ping"
     resource = ""
 
     @API.endpoint("/ping", methods=["GET"], name="ping")
@@ -49,6 +50,7 @@ class TestErrorShapes(unittest.IsolatedAsyncioTestCase):
     async def test_validation_error_shape(self):
         # Endpoint expecting JSON; send invalid JSON
         class EchoAPI(API):
+            name = "echo"
             resource = ""
 
             @API.endpoint("/echo", methods=["POST"], name="echo")
@@ -71,6 +73,7 @@ class TestErrorShapes(unittest.IsolatedAsyncioTestCase):
 
     async def test_auth_and_permission_error_shapes(self):
         class SecureAPI(API):
+            name = "secure"
             resource = ""
 
             @API.endpoint("/secure", methods=["GET"], name="secure")
@@ -99,6 +102,7 @@ class TestErrorShapes(unittest.IsolatedAsyncioTestCase):
                 return False
 
         class PermAPI(API):
+            name = "perm"
             resource = ""
 
             @API.endpoint("/perm", methods=["GET"], name="perm", permission_classes=[DenyAll])

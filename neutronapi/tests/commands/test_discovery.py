@@ -15,6 +15,7 @@ import sys
 import tempfile
 import shutil
 import unittest
+import uuid
 from unittest.mock import patch, MagicMock
 from neutronapi.commands.test import Command
 
@@ -30,23 +31,37 @@ class TestNestedTestDiscovery(unittest.TestCase):
         self.create_test_structure()
         
     def tearDown(self):
-        """Clean up temporary directory."""
+        """Clean up temporary directory and imported modules."""
         os.chdir(self.original_cwd)
         shutil.rmtree(self.temp_dir)
         
+        # Clean up any imported test modules to prevent import conflicts
+        if hasattr(self, 'app_name'):
+            modules_to_remove = []
+            for module_name in sys.modules:
+                if ('test_intents' in module_name or 'test_secrets' in module_name or 
+                    'test_basic' in module_name or module_name.startswith(f'{self.app_name}.')):
+                    modules_to_remove.append(module_name)
+            
+            for module_name in modules_to_remove:
+                sys.modules.pop(module_name, None)
+        
     def create_test_structure(self):
         """Create a test project structure with nested test directories."""
+        # Use unique app name to avoid import conflicts
+        self.app_name = f"testapp_{uuid.uuid4().hex[:8]}"
+        
         # Create apps directory structure
-        os.makedirs("apps/myapp/tests/services", exist_ok=True)
-        os.makedirs("apps/myapp/tests/models", exist_ok=True)
+        os.makedirs(f"apps/{self.app_name}/tests/services", exist_ok=True)
+        os.makedirs(f"apps/{self.app_name}/tests/models", exist_ok=True)
         
         # Create __init__.py files for proper Python package structure
         init_files = [
             "apps/__init__.py",
-            "apps/myapp/__init__.py", 
-            "apps/myapp/tests/__init__.py",
-            "apps/myapp/tests/services/__init__.py",
-            "apps/myapp/tests/models/__init__.py"
+            f"apps/{self.app_name}/__init__.py", 
+            f"apps/{self.app_name}/tests/__init__.py",
+            f"apps/{self.app_name}/tests/services/__init__.py",
+            f"apps/{self.app_name}/tests/models/__init__.py"
         ]
         
         for init_file in init_files:
@@ -55,7 +70,7 @@ class TestNestedTestDiscovery(unittest.TestCase):
         
         # Create test files in nested directories
         test_files = {
-            "apps/myapp/tests/services/test_intents.py": '''
+            f"apps/{self.app_name}/tests/services/test_intents.py": '''
 import unittest
 
 class TestIntents(unittest.TestCase):
@@ -67,7 +82,7 @@ class TestIntents(unittest.TestCase):
         """Test intent processing functionality."""
         self.assertEqual(1 + 1, 2)
 ''',
-            "apps/myapp/tests/models/test_secrets.py": '''
+            f"apps/{self.app_name}/tests/models/test_secrets.py": '''
 import unittest
 
 class TestSecrets(unittest.TestCase):
@@ -79,7 +94,7 @@ class TestSecrets(unittest.TestCase):
         """Test secret encryption."""
         self.assertIsNotNone("encrypted_value")
 ''',
-            "apps/myapp/tests/test_basic.py": '''
+            f"apps/{self.app_name}/tests/test_basic.py": '''
 import unittest
 
 class TestBasic(unittest.TestCase):
@@ -108,7 +123,7 @@ class TestBasic(unittest.TestCase):
             
             # This should work with our fix but would fail before
             suite = loader.discover(
-                start_dir="apps/myapp/tests",
+                start_dir=f"apps/{self.app_name}/tests",
                 pattern="test_*.py", 
                 top_level_dir="apps"
             )
@@ -136,7 +151,7 @@ class TestBasic(unittest.TestCase):
             # Test that unittest can discover tests with proper top_level_dir
             loader = unittest.TestLoader()
             suite = loader.discover(
-                start_dir="apps/myapp/tests",
+                start_dir=f"apps/{self.app_name}/tests",
                 pattern="test_*.py", 
                 top_level_dir="apps"
             )

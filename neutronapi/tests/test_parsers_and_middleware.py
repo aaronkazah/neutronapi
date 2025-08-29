@@ -56,6 +56,7 @@ async def call_asgi(app: Callable, scope: Dict, body: bytes = b"", headers=None)
 class TestParsersAndMiddleware(unittest.IsolatedAsyncioTestCase):
     async def test_default_json_parser_and_endpoint_middleware(self):
         class EchoAPI(API):
+            name = "echo"
             resource = ""
 
             @API.endpoint(
@@ -98,6 +99,7 @@ class TestParsersAndMiddleware(unittest.IsolatedAsyncioTestCase):
         from neutronapi.parsers import FormParser, BinaryParser
 
         class MultiAPI(API):
+            name = "multi"
             resource = ""
 
             @API.endpoint("/form", methods=["POST"], parsers=[FormParser()])
@@ -143,6 +145,7 @@ class TestParsersAndMiddleware(unittest.IsolatedAsyncioTestCase):
         from neutronapi.parsers import MultiPartParser
 
         class UpAPI(API):
+            name = "up"
             resource = ""
 
             @API.endpoint("/upload", methods=["POST"], parsers=[MultiPartParser()])
@@ -190,6 +193,7 @@ class TestParsersAndMiddleware(unittest.IsolatedAsyncioTestCase):
     async def test_compression_gzip_and_skip(self):
         # Create large JSON to trigger compression
         class BigAPI(API):
+            name = "big"
             resource = ""
 
             @API.endpoint("/big", methods=["GET"])
@@ -244,6 +248,7 @@ class TestParsersAndMiddleware(unittest.IsolatedAsyncioTestCase):
 
     async def test_endpoint_and_global_middleware_multiple(self):
         class HeadersAPI(API):
+            name = "headers"
             resource = ""
 
             @API.endpoint(
@@ -274,12 +279,14 @@ class TestParsersAndMiddleware(unittest.IsolatedAsyncioTestCase):
         shared = DummyService(id="shared")
 
         class A(API):
+            name = "a"
             resource = "/a"
             @API.endpoint("/", methods=["GET"])
             async def a(self, scope, receive, send, **kwargs):
                 return await self.response({"sid": id(self.registry["services:shared"])})
 
         class B(API):
+            name = "b"
             resource = "/b"
             @API.endpoint("/", methods=["GET"])
             async def b(self, scope, receive, send, **kwargs):
