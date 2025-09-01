@@ -15,6 +15,12 @@ class TestStatus(Enum):
     COMPLETED = "completed"
 
 
+class IntentStatus(Enum):
+    PENDING = "pending"
+    REFRESHED = "refreshed"
+    EXPIRED = "expired"
+
+
 class TestObject(Model):
     """Test model for QuerySet testing."""
     key = CharField(null=False)
@@ -27,6 +33,8 @@ class TestObject(Model):
     connections = JSONField(null=True, default=dict)
     expires = DateTimeField(null=True)
     status = EnumField(TestStatus, null=True)
+    # Add a field that can handle IntentStatus for the OAuth test
+    intent_status = EnumField(IntentStatus, null=True)
 
 
 class TestQuerySetMoreSQLite(unittest.IsolatedAsyncioTestCase):
@@ -245,3 +253,131 @@ class TestQuerySetMoreSQLite(unittest.IsolatedAsyncioTestCase):
         )
         running_google_results = [obj.name for obj in running_google_qs]
         self.assertCountEqual(running_google_results, ['A'])
+
+    async def test_complex_combined_filtering_oauth_scenario(self):
+        """Test the exact OAuth scenario: simple + JSON + enum __in filtering combined."""
+        
+        # Create test data that mimics the OAuth scenario
+        await TestObject.objects.create(
+            id="oauth-1",
+            key="state123",
+            name="OAuth1", 
+            kind="oauth",
+            meta={"type": "google", "client_id": "abc123"},
+            intent_status=IntentStatus.PENDING,
+        )
+        await TestObject.objects.create(
+            id="oauth-2", 
+            key="state456",
+            name="OAuth2",
+            kind="oauth", 
+            meta={"type": "github", "client_id": "def456"},
+            intent_status=IntentStatus.REFRESHED,
+        )
+        await TestObject.objects.create(
+            id="oauth-3",
+            key="state789", 
+            name="OAuth3",
+            kind="oauth",
+            meta={"type": "google", "client_id": "ghi789"},
+            intent_status=IntentStatus.EXPIRED,  # Should not match __in filter
+        )
+        await TestObject.objects.create(
+            id="other-1",
+            key="state999",
+            name="Other",
+            kind="other",  # Should not match type filter
+            meta={"type": "google", "client_id": "jkl999"},
+            intent_status=IntentStatus.PENDING,
+        )
+        
+        # Test the exact OAuth query pattern that's failing
+        state = "state123"
+        oauth_type = "google"
+        
+        intents_qs_builder = TestObject.objects.filter(
+            kind="oauth",                                                           # simple field
+            key=state,                                                              # simple field  
+            meta__type=oauth_type,                                                 # JSON field filter
+            intent_status__in=[IntentStatus.PENDING, IntentStatus.REFRESHED],     # enum __in filter 
+        )
+        
+        intents_qs = await intents_qs_builder
+        intent_results = [obj.name for obj in intents_qs]
+        
+        # Should only match oauth-1 (all conditions met)
+        self.assertCountEqual(intent_results, ['OAuth1'])
+        
+        # Test a broader query to make sure multiple results work
+        broader_qs = await TestObject.objects.filter(
+            kind="oauth",
+            meta__type="google", 
+            intent_status__in=[IntentStatus.PENDING, IntentStatus.REFRESHED],
+        )
+        broader_results = [obj.name for obj in broader_qs]
+        
+        # Should match both oauth-1 (PENDING) and not oauth-3 (EXPIRED)
+        self.assertCountEqual(broader_results, ['OAuth1'])
+        
+        # Test with Q objects to see if that causes issues
+        from neutronapi.db.queryset import Q
+        q_qs = await TestObject.objects.filter(
+            Q(kind="oauth") & 
+            Q(key=state) & 
+            Q(meta__type=oauth_type) &
+            Q(intent_status__in=[IntentStatus.PENDING, IntentStatus.REFRESHED])
+        )
+        q_results = [obj.name for obj in q_qs]
+        self.assertCountEqual(q_results, ['OAuth1'])
+        
+        # Test edge case: empty __in list
+        try:
+            empty_in_qs = await TestObject.objects.filter(
+                kind="oauth",
+                intent_status__in=[]  # Empty list - should return no results
+            )
+            empty_results = list(empty_in_qs)
+            self.assertEqual(len(empty_results), 0)
+        except Exception as e:
+            print(f"Empty __in list caused error: {e}")
+            
+        # Test edge case: mixed types in the list (this should work)
+        mixed_qs = await TestObject.objects.filter(
+            kind="oauth",
+            intent_status__in=[IntentStatus.PENDING, "refreshed"]  # Mixed enum and string
+        )
+        mixed_results = [obj.name for obj in mixed_qs]
+        self.assertCountEqual(mixed_results, ['OAuth1', 'OAuth2'])
+
+    async def test_enum_in_conversion_detailed(self):
+        """Detailed test to verify enum __in conversion is working correctly."""
+        
+        # Test that EnumField.to_db properly converts enum values
+        from neutronapi.db.fields import EnumField
+        field = EnumField(IntentStatus)
+        
+        # Test individual enum conversion
+        pending_converted = field.to_db(IntentStatus.PENDING)
+        refreshed_converted = field.to_db(IntentStatus.REFRESHED)
+        
+        self.assertEqual(pending_converted, "pending")
+        self.assertEqual(refreshed_converted, "refreshed")
+        
+        # Test manual SQL generation for enum __in
+        qs_builder = TestObject.objects.filter(
+            intent_status__in=[IntentStatus.PENDING, IntentStatus.REFRESHED]
+        )
+        
+        provider = await qs_builder._get_provider()
+        sql, params = qs_builder._build_query()
+        
+        # Verify the SQL contains IN clause
+        self.assertIn("intent_status IN", sql)
+        
+        # Verify parameters are converted enum values (strings)
+        enum_params = [p for p in params if p in ["pending", "refreshed"]]
+        self.assertCountEqual(enum_params, ["pending", "refreshed"])
+        
+        # Verify all parameters are strings, not enum objects
+        for param in params:
+            self.assertNotIsInstance(param, IntentStatus)  # Should not be enum objects
