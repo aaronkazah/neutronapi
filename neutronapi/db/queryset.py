@@ -653,17 +653,32 @@ class QuerySet(Generic[T]):
                             if not value:
                                 parts.append("1=0")
                             else:
-                                # *** FIX: Generate correct placeholders for IN clause ***
+                                # Convert each item in the list using field's to_db method
+                                converted_values = []
+                                if hasattr(self.model, '_fields') and field_name in self.model._fields:
+                                    field = self.model._fields[field_name]
+                                    for item in value:
+                                        db_value = item
+                                        if hasattr(field, 'to_db'):
+                                            db_value = field.to_db(item)
+                                            # Let the provider handle final conversion for query parameters
+                                            if self.provider and hasattr(self.provider, 'convert_query_param'):
+                                                db_value = self.provider.convert_query_param(db_value, field)
+                                        converted_values.append(db_value)
+                                else:
+                                    converted_values = list(value)
+
+                                # Generate correct placeholders for IN clause
                                 if self._is_sqlite:
-                                    placeholders = ', '.join(['?'] * len(value))
+                                    placeholders = ', '.join(['?'] * len(converted_values))
                                 else:
                                     placeholders = ', '.join(
-                                        [f'${i}' for i in range(param_counter, param_counter + len(value))])
+                                        [f'${i}' for i in range(param_counter, param_counter + len(converted_values))])
 
                                 condition = f"{field_name} IN ({placeholders})"
                                 parts.append(condition)
-                                params.extend(value)
-                                param_counter += len(value)
+                                params.extend(converted_values)
+                                param_counter += len(converted_values)
                         elif lookup_type == 'isnull':
                             condition = f"{field_name} IS NULL" if value else f"{field_name} IS NOT NULL"
                             parts.append(condition)
@@ -682,14 +697,37 @@ class QuerySet(Generic[T]):
                             condition = f"{field_expr} {op} {value_expr}"
                             parts.append(condition)
 
+                            # For string-based lookups, don't apply provider conversion to datetime fields
                             if lookup_type in ['contains', 'icontains']:
+                                # String lookups - check if this makes sense for the field type
+                                if hasattr(self.model, '_fields') and field_name in self.model._fields:
+                                    field = self.model._fields[field_name]
+                                    if hasattr(field, '__class__') and 'DateTimeField' in field.__class__.__name__:
+                                        raise ValueError(f"Lookup '{lookup_type}' is not supported for DateTimeField")
                                 params.append(f"%{value}%")
                             elif lookup_type == 'startswith':
+                                if hasattr(self.model, '_fields') and field_name in self.model._fields:
+                                    field = self.model._fields[field_name]
+                                    if hasattr(field, '__class__') and 'DateTimeField' in field.__class__.__name__:
+                                        raise ValueError(f"Lookup 'startswith' is not supported for DateTimeField")
                                 params.append(f"{value}%")
                             elif lookup_type == 'endswith':
+                                if hasattr(self.model, '_fields') and field_name in self.model._fields:
+                                    field = self.model._fields[field_name]
+                                    if hasattr(field, '__class__') and 'DateTimeField' in field.__class__.__name__:
+                                        raise ValueError(f"Lookup 'endswith' is not supported for DateTimeField")
                                 params.append(f"%{value}")
                             else:
-                                params.append(value)
+                                # Comparison lookups - apply provider conversion for datetime fields
+                                db_value = value
+                                if hasattr(self.model, '_fields') and field_name in self.model._fields:
+                                    field = self.model._fields[field_name]
+                                    if hasattr(field, 'to_db'):
+                                        db_value = field.to_db(value)
+                                        # Let the provider handle final conversion for query parameters
+                                        if self.provider and hasattr(self.provider, 'convert_query_param'):
+                                            db_value = self.provider.convert_query_param(db_value, field)
+                                params.append(db_value)
                             param_counter += 1
                 else:
                     raise ValueError(f"Invalid Q object child: {child}")

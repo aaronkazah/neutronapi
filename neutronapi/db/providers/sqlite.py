@@ -140,6 +140,14 @@ class SQLiteProvider(BaseProvider):
     def deserialize(self, data: str) -> Any:
         return json.loads(data) if data is not None else None
 
+    def convert_query_param(self, value: Any, field) -> Any:
+        """Convert query parameter values for SQLite-specific requirements."""
+        # For DateTimeField, convert datetime objects to ISO strings for TEXT storage
+        if hasattr(field, '__class__') and 'DateTimeField' in field.__class__.__name__:
+            if isinstance(value, datetime.datetime):
+                return value.isoformat()
+        return value
+
     # Schema operations (merged)
     def _process_default_value(self, default: Any) -> str:
         value = default() if callable(default) else default

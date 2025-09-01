@@ -164,6 +164,11 @@ class PostgreSQLProvider(BaseProvider):
             return json.loads(data)
         return data
 
+    def convert_query_param(self, value: Any, field) -> Any:
+        """Convert query parameter values for PostgreSQL-specific requirements."""
+        # PostgreSQL handles datetime objects natively, no conversion needed
+        return value
+
     # Schema operations
     def _pg_ident(self, name: str) -> str:
         return '"' + name.replace('"', '""') + '"'
