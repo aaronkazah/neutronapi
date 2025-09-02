@@ -63,18 +63,39 @@ def discover_commands() -> Dict[str, Any]:
     # Project app-specific commands
     apps_dir = os.path.join(os.getcwd(), 'apps')
     if os.path.isdir(apps_dir):
+        # Add the project root to sys.path so we can import apps
+        project_root = os.getcwd()
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        
         for app_name in os.listdir(apps_dir):
-            app_commands_dir = os.path.join(apps_dir, app_name, 'commands')
-            if os.path.isdir(app_commands_dir):
-                for filename in os.listdir(app_commands_dir):
-                    if filename.endswith('.py') and not filename.startswith('__'):
-                        command_name = filename[:-3]
-                        try:
-                            module = importlib.import_module(f"apps.{app_name}.commands.{command_name}")
-                            if hasattr(module, 'Command'):
-                                commands[command_name] = module.Command()
-                        except ImportError:
-                            pass
+            app_path = os.path.join(apps_dir, app_name)
+            if os.path.isdir(app_path) and not app_name.startswith('.'):
+                app_commands_dir = os.path.join(app_path, 'commands')
+                if os.path.isdir(app_commands_dir):
+                    for filename in os.listdir(app_commands_dir):
+                        if filename.endswith('.py') and not filename.startswith('__'):
+                            command_name = filename[:-3]
+                            try:
+                                # Clear import cache to ensure fresh imports during testing
+                                module_name = f"apps.{app_name}.commands.{command_name}"
+                                parent_modules = [
+                                    "apps",
+                                    f"apps.{app_name}",
+                                    f"apps.{app_name}.commands",
+                                    module_name
+                                ]
+                                for mod in parent_modules:
+                                    if mod in sys.modules:
+                                        del sys.modules[mod]
+                                
+                                module = importlib.import_module(module_name)
+                                if hasattr(module, 'Command'):
+                                    commands[command_name] = module.Command()
+                            except Exception as e:
+                                # Skip modules that fail to import (syntax errors, missing deps, etc.)
+                                # print(f"Failed to import apps.{app_name}.commands.{command_name}: {e}")
+                                pass
 
     return commands
 

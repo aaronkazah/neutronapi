@@ -321,6 +321,30 @@ python manage.py migrate            # Run migrations
 python manage.py startapp posts     # Create new app
 ```
 
+### Custom Commands
+
+Create custom management commands like Django by adding them to your app's `commands` directory:
+
+```python
+# apps/blog/commands/greet.py
+from neutronapi.commands.base import BaseCommand
+
+class Command(BaseCommand):
+    help = "Greet a user"
+    
+    def handle(self, *args, **options):
+        name = args[0] if args else "World"
+        self.success(f"Hello, {name}!")
+        return 0
+```
+
+Run with:
+```bash
+python manage.py greet Alice    # Hello, Alice!
+```
+
+Commands are automatically discovered from any `apps/*/commands/*.py` files that contain a `Command` class.
+
 ## Middlewares
 
 ```python
