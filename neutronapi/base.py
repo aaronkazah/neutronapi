@@ -191,7 +191,7 @@ class API:
     error_responses: Optional[Dict[int, JsonSchemaDict]] = None
 
     # Documentation control
-    hidden: bool = False  # If True, exclude entire API from documentation
+    hidden: bool = False  # If True, exclude from OpenAPI docs by default (e.g., internal/debug APIs)
     
     # Dependency injection attributes (set by Application)
     registry: Dict[str, Any]  # Universal registry for all components

@@ -477,39 +477,68 @@ from neutronapi.exceptions import ImproperlyConfigured, ValidationError, ObjectD
 
 ## OpenAPI Documentation
 
-Generate OpenAPI 3.0 specifications from your code:
+Automatically generate OpenAPI 3.0 specifications from your APIs:
 
 ```python
 from neutronapi.openapi.openapi import OpenAPIGenerator
 
-# Add documentation to endpoints
+# Basic API - automatically discovered
 class UserAPI(API):
-    resource = "/users"
+    resource = "/v1/users"
     name = "users"
     
-    @endpoint("/", methods=["GET"], 
-              summary="List users",
-              response_schema={
-                  "type": "object",
-                  "properties": {
-                      "users": {"type": "array"},
-                      "total": {"type": "integer"}
-                  }
-              })
+    @API.endpoint("/", methods=["GET"], name="list")
     async def list_users(self, scope, receive, send, **kwargs):
-        return await self.response({"users": [], "total": 0})
+        return await self.response({"users": []})
 
-# Generate specification
-async def generate_docs():
-    import json
-    generator = OpenAPIGenerator(title="My API", version="1.0.0")
-    spec = await generator.generate_from_application(app)
+# Internal/debug API - hidden by default
+class DebugAPI(API):
+    resource = "/debug"
+    name = "debug" 
+    hidden = True  # Excluded from docs by default
     
-    with open('openapi.json', 'w') as f:
-        json.dump(spec, f, indent=2)
+    @API.endpoint("/status", methods=["GET"], name="status")
+    async def debug_status(self, scope, receive, send, **kwargs):
+        return await self.response({"debug": True})
 
-# Use with external documentation tools (Swagger UI, Postman, etc.)
+# Generate public API docs (excludes hidden APIs)
+async def generate_public_docs():
+    apis = {"users": UserAPI(), "debug": DebugAPI()}
+    
+    generator = OpenAPIGenerator(title="My API", version="1.0.0")
+    spec = await generator.generate(source=apis)
+    # Result: Only includes /v1/users endpoints
+    
+# Generate complete docs (includes everything)
+async def generate_complete_docs():
+    apis = {"users": UserAPI(), "debug": DebugAPI()}
+    
+    generator = OpenAPIGenerator(
+        title="Complete API",
+        include_all=True  # Include hidden APIs and private endpoints
+    )
+    spec = await generator.generate(source=apis)
+    # Result: Includes both /v1/users and /debug endpoints
+
+# Exclude specific patterns
+async def generate_filtered_docs():
+    apis = {"users": UserAPI(), "debug": DebugAPI()}
+    
+    generator = OpenAPIGenerator(
+        title="Filtered API",
+        exclude_patterns=["/debug/*", "/internal/*"]
+    )
+    spec = await generator.generate(source=apis)
+
+# Convenience function for all endpoints
+from neutronapi.openapi.openapi import generate_all_endpoints_openapi
+spec = await generate_all_endpoints_openapi(apis, title="All Endpoints")
 ```
+
+**Why use `hidden=True`?**
+- Mark internal APIs (debugging, health checks, admin endpoints)
+- Keep them accessible but exclude from public documentation
+- Use `include_all=True` to generate complete internal docs
 
 ## Why NeutronAPI?
 

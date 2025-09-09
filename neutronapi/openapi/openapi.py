@@ -23,8 +23,31 @@ class OpenAPIGenerator:
 
     Supports automatic generation from:
     - Individual API instances
-    - Router with multiple APIs
+    - Router with multiple APIs  
     - Full application created with create_application()
+    
+    Discovery Options:
+    - include_all: Include ALL endpoints including hidden APIs and private endpoints (default: False)
+    - exclude_patterns: List of glob patterns to exclude paths (e.g., ["/internal/*", "/debug/*"])
+    
+    Examples:
+        # Basic usage - discovers all public endpoints
+        generator = OpenAPIGenerator(title="My API", version="1.0.0")
+        spec = await generator.generate(source=apis)
+        
+        # Include ALL endpoints (including hidden APIs and private endpoints)
+        generator = OpenAPIGenerator(
+            title="Complete API", 
+            include_all=True
+        )
+        spec = await generator.generate(source=apis)
+        
+        # Exclude specific patterns
+        generator = OpenAPIGenerator(
+            title="Public API",
+            exclude_patterns=["/internal/*", "/admin/*", "/_*"]
+        )
+        spec = await generator.generate(source=apis)
     """
 
     def __init__(
@@ -36,6 +59,9 @@ class OpenAPIGenerator:
         contact: Optional[Dict[str, str]] = None,
         license_info: Optional[Dict[str, str]] = None,
         override_router_version: bool = False,
+        # Discovery options
+        include_all: bool = False,  # Include ALL endpoints (hidden APIs and private endpoints)
+        exclude_patterns: Optional[List[str]] = None,  # Glob patterns to exclude paths
     ):
         self.title = title
         self.description = description
@@ -46,6 +72,10 @@ class OpenAPIGenerator:
         ]
         self.contact = contact
         self.license_info = license_info
+        
+        # Discovery options
+        self.include_all = include_all
+        self.exclude_patterns = exclude_patterns or []
 
         self.spec = {
             "openapi": "3.0.3",
@@ -180,8 +210,8 @@ class OpenAPIGenerator:
 
     async def _process_api(self, api: API) -> None:
         """Process a single API instance and add its routes to the spec."""
-        # Skip hidden APIs entirely
-        if getattr(api, "hidden", False):
+        # Skip APIs marked as hidden unless include_all is True
+        if getattr(api, "hidden", False) and not self.include_all:
             return
 
         # Add API-level tags
@@ -222,8 +252,9 @@ class OpenAPIGenerator:
             if methods == ["WEBSOCKET"]:
                 continue
 
-            # Check if endpoint should be included in docs
-            if not self._should_include_endpoint(handler, original_path, methods):
+            # Check if endpoint should be included in docs  
+            openapi_path = self._convert_path_to_openapi(original_path)
+            if not self._should_include_endpoint(handler, openapi_path, methods):
                 continue
 
             await self._process_route(
@@ -242,14 +273,19 @@ class OpenAPIGenerator:
         """Check if an endpoint should be included in documentation."""
         # Check endpoint-level include_in_docs setting
         endpoint_metadata = getattr(handler, "_endpoint", None)
-        if endpoint_metadata and not endpoint_metadata.include_in_docs:
+        if endpoint_metadata and not endpoint_metadata.include_in_docs and not self.include_all:
             return False
 
-        # Check environment-based exclusion patterns
-        exclude_patterns = os.environ.get("API_DOCS_EXCLUDE_PATTERNS", "").split(",")
-        exclude_patterns = [p.strip() for p in exclude_patterns if p.strip()]
+        # Check configured exclusion patterns first
+        for pattern in self.exclude_patterns:
+            if fnmatch.fnmatch(path, pattern):
+                return False
 
-        for pattern in exclude_patterns:
+        # Check environment-based exclusion patterns
+        env_exclude_patterns = os.environ.get("API_DOCS_EXCLUDE_PATTERNS", "").split(",")
+        env_exclude_patterns = [p.strip() for p in env_exclude_patterns if p.strip()]
+
+        for pattern in env_exclude_patterns:
             if fnmatch.fnmatch(path, pattern):
                 return False
 
@@ -675,64 +711,6 @@ class OpenAPIGenerator:
         """Get the specification as a dictionary."""
         return self.spec
 
-    def _should_include_endpoint(
-        self, handler: callable, path: str, methods: List[str]
-    ) -> bool:
-        """
-        Determine if an endpoint should be included in the documentation.
-
-        Args:
-            handler: The endpoint handler function
-            path: The endpoint path
-            methods: List of HTTP methods
-
-        Returns:
-            True if endpoint should be included, False otherwise
-        """
-        # Check endpoint-level include_in_docs flag
-        if hasattr(handler, "_endpoint"):
-            metadata = handler._endpoint
-            if not getattr(metadata, "include_in_docs", True):
-                return False
-
-        # Check global exclusion patterns (environment-based filtering)
-        exclude_patterns = self._get_exclusion_patterns()
-        for pattern in exclude_patterns:
-            if self._matches_pattern(path, pattern):
-                return False
-
-        # Check for internal/debug endpoints (common patterns to exclude)
-        internal_patterns = [
-            "/internal/*",
-            "/debug/*",
-            "/_*",
-            "/health*",  # Often excluded from public docs
-        ]
-
-        # Allow override via environment variable
-        if os.getenv("INCLUDE_INTERNAL_ENDPOINTS", "").lower() != "True":
-            for pattern in internal_patterns:
-                if self._matches_pattern(path, pattern):
-                    return False
-
-        return True
-
-    def _get_exclusion_patterns(self) -> List[str]:
-        """Get list of path patterns to exclude from documentation."""
-        patterns = []
-
-        # Environment variable for custom exclusions
-        env_excludes = os.getenv("API_DOCS_EXCLUDE_PATTERNS", "")
-        if env_excludes:
-            patterns.extend([p.strip() for p in env_excludes.split(",") if p.strip()])
-
-        return patterns
-
-    def _matches_pattern(self, path: str, pattern: str) -> bool:
-        """Check if a path matches a glob-style pattern."""
-        import fnmatch
-
-        return fnmatch.fnmatch(path, pattern)
 
 
 async def generate_openapi_from_application(
@@ -764,6 +742,37 @@ async def generate_openapi_from_application(
         **kwargs,
     )
     return await generator.generate_from_application(app)
+
+
+async def generate_all_endpoints_openapi(
+    apis: Dict[str, API],
+    title: str = "API Documentation", 
+    description: str = "Auto-generated API documentation",
+    version: str = "1.0.0",
+    **kwargs,
+) -> Dict[str, Any]:
+    """
+    Convenience function to generate OpenAPI spec with ALL endpoints (including hidden).
+    
+    Args:
+        apis: Dictionary of API instances
+        title: API title
+        description: API description
+        version: API version
+        **kwargs: Additional arguments for OpenAPIGenerator
+        
+    Returns:
+        OpenAPI 3.0 specification dictionary with all endpoints
+    """
+    generator = OpenAPIGenerator(
+        title=title,
+        description=description,
+        version=version,
+        include_all=True,
+        exclude_patterns=[],
+        **kwargs,
+    )
+    return await generator.generate(source=apis)
 
 
 async def generate_openapi_from_apis(
