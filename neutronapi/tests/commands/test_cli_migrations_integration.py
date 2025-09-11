@@ -48,6 +48,7 @@ class TestCLIMigrationsIntegration(TestCase):
 
     def _create_tmp_app_test(self, app_label: str, table_name: str):
         tests_dir = os.path.join(self.apps_dir, app_label, 'tests')
+        self._write_file(os.path.join(tests_dir, '__init__.py'), '')
         test_py = textwrap.dedent(
             f"""
             import unittest
@@ -67,19 +68,44 @@ class TestCLIMigrationsIntegration(TestCase):
         table_name = f'{app_label}_dummy'
         self._create_tmp_app_with_migration(app_label)
 
-        # Apply migrations directly using tracker (no subprocess, single DB env)
+        # Apply migrations directly using tracker, forcing a SQLite connection
         import asyncio
+        import os
+        import tempfile
         from neutronapi.db.migration_tracker import MigrationTracker
-        from neutronapi.db.connection import get_databases
+        from neutronapi.db.connection import get_databases, setup_databases
 
         async def apply_and_check():
-            os.environ.pop('DATABASE_PROVIDER', None)  # force sqlite path
-            os.environ['TESTING'] = '1'
-            tracker = MigrationTracker(base_dir='apps')
-            conn = await get_databases().get_connection('default')
-            await tracker.migrate(conn)
-            exists = await conn.provider.table_exists(table_name)
-            return exists
+            # Force an isolated SQLite database for this test
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
+            tmp.close()
+            cfg = {
+                'default': {
+                    'ENGINE': 'aiosqlite',
+                    'NAME': tmp.name,
+                }
+            }
+            db_manager = setup_databases(cfg)
+            try:
+                tracker = MigrationTracker(base_dir='apps')
+                conn = await get_databases().get_connection('default')
+                await tracker.migrate(conn)
+                exists = await conn.provider.table_exists(table_name)
+                return exists
+            finally:
+                try:
+                    await db_manager.close_all()
+                except Exception:
+                    pass
+                try:
+                    os.unlink(tmp.name)
+                except Exception:
+                    pass
+                # Restore default connection manager from settings for other tests
+                try:
+                    setup_databases(None)
+                except Exception:
+                    pass
 
         self.assertTrue(asyncio.run(apply_and_check()), 'SQLite migration should create the table')
 
@@ -95,10 +121,52 @@ class TestCLIMigrationsIntegration(TestCase):
         self.assertIn(app_label, discovered, 'Should discover migrations for the temp app')
         self.assertGreater(len(discovered[app_label]), 0, 'Temp app should have at least one migration file')
 
-    @skipUnless(os.getenv('DATABASE_PROVIDER', '').lower() in ('asyncpg', 'postgres', 'postgresql'),
-               'Postgres provider not selected (set DATABASE_PROVIDER=asyncpg to enable)')
+    def _is_postgres_configured(self):
+        """Check if default database is PostgreSQL and reachable."""
+        try:
+            from neutronapi.conf import settings
+            import asyncio
+            import asyncpg
+            
+            db_config = settings.DATABASES.get('default', {})
+            if db_config.get('ENGINE', '').lower() != 'asyncpg':
+                return False
+
+            async def check_connection():
+                try:
+                    # Prefer configured DB; fall back to 'postgres' if it doesn't exist yet
+                    conn = await asyncpg.connect(
+                        host=db_config.get('HOST', 'localhost'),
+                        port=db_config.get('PORT', 5432),
+                        database=db_config.get('NAME', 'neutronapi_test'),
+                        user=db_config.get('USER', 'postgres'),
+                        password=db_config.get('PASSWORD', 'postgres'),
+                    )
+                    await conn.close()
+                    return True
+                except Exception:
+                    try:
+                        conn = await asyncpg.connect(
+                            host=db_config.get('HOST', 'localhost'),
+                            port=db_config.get('PORT', 5432),
+                            database='postgres',
+                            user=db_config.get('USER', 'postgres'),
+                            password=db_config.get('PASSWORD', 'postgres'),
+                        )
+                        await conn.close()
+                        return True
+                    except Exception:
+                        return False
+
+            return asyncio.run(check_connection())
+        except Exception:
+            return False
+
     @skipIf(shutil.which('docker') is None, 'Docker not available for Postgres test')
     def test_manage_py_test_applies_postgres_migrations(self):
+        if not self._is_postgres_configured():
+            self.skipTest('PostgreSQL not configured in settings.DATABASES')
+            
         app_label = 'tmpapp_pg'
         # For PostgreSQL, table is created in schema 'tmpapp_pg' with name 'dummy'
         table_name = f'{app_label}.dummy'
@@ -106,8 +174,8 @@ class TestCLIMigrationsIntegration(TestCase):
         self._create_tmp_app_test(app_label, table_name)
 
         env = os.environ.copy()
+        # Force Postgres default test settings in the subprocess when no apps/settings.py exists
         env['DATABASE_PROVIDER'] = 'asyncpg'
-        env['TESTING'] = '1'
 
         result = subprocess.run(
             [sys.executable, 'manage.py', 'test', app_label, '-q'],

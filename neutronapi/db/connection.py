@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Dict, Any, Optional
 
 from .providers import SQLiteProvider, PostgreSQLProvider
+from neutronapi.conf import ImproperlyConfigured
 
 
 class DatabaseType(Enum):
@@ -92,17 +93,16 @@ class Connection:
 
 class ConnectionsManager:
     def __init__(self, config: Optional[Dict[str, Dict[str, Any]]] = None):
-        # Resolve engine from env if provided (DATABASE_PROVIDER=aiosqlite|asyncpg)
-        env_engine = _normalize_engine(os.getenv('DATABASE_PROVIDER', ''))
-        default_engine = 'asyncpg' if env_engine == 'asyncpg' else 'aiosqlite'
-        # Default to in-memory sqlite when running tests (TESTING=1)
-        default_name = ':memory:' if os.getenv('TESTING', '0') == '1' else os.path.join(os.getcwd(), 'db.sqlite3')
-        self.config = config or {
-            'default': {
-                'ENGINE': default_engine,
-                'NAME': default_name,
-            }
-        }
+        if config is None:
+            # Use settings.DATABASES as the only source of truth
+            from neutronapi.conf import settings
+            if not hasattr(settings, 'DATABASES'):
+                raise ImproperlyConfigured(
+                    "DATABASES setting is required. Please define DATABASES in your settings module."
+                )
+            config = settings.DATABASES
+            
+        self.config = config
         self.router = DatabaseRouter()
         self._connections: Dict[str, Connection] = {}
 

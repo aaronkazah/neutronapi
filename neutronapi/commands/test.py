@@ -14,6 +14,7 @@ class Command:
 
     def __init__(self):
         self.help = "Run database tests with dot notation support"
+        self._pg_container = None
 
     async def safe_shutdown(self):
         """Safely shutdown database connections with timeout."""
@@ -32,24 +33,91 @@ class Command:
         """Run shutdown in the current event loop context."""
         await self.safe_shutdown()
 
-    def _bootstrap_sqlite(self):
-        # Use in-memory sqlite as the default test DB
-        import os
-        from neutronapi.db import setup_databases
-        os.environ['TESTING'] = '1'  # Ensure ConnectionsManager prefers :memory:
+    async def _has_existing_postgres_server(self, db_config: dict) -> bool:
+        """Check if PostgreSQL server is already running and accessible."""
         try:
-            from apps.settings import DATABASES  # Optional, if running inside a project
-            setup_databases(DATABASES)
-            return
-        except Exception:
-            # Fall back to a guaranteed in-memory configuration even if a manager already exists
-            test_config = {
-                'default': {
-                    'ENGINE': 'aiosqlite',
-                    'NAME': ':memory:',
-                }
-            }
-            setup_databases(test_config)
+            import asyncpg
+            conn = await asyncpg.connect(
+                host=db_config.get('HOST', 'localhost'),
+                port=db_config.get('PORT', 5432),
+                database='postgres',  # Connect to default postgres DB to test connection
+                user=db_config.get('USER', 'postgres'),
+                password=db_config.get('PASSWORD', ''),
+            )
+            await conn.close()
+            return True
+        except:
+            return False
+
+    async def _setup_test_database(self, db_config: dict):
+        """Create a test database on existing PostgreSQL server."""
+        import asyncpg
+        test_db_name = f"test_{db_config.get('NAME', 'neutronapi')}"
+        
+        # Update settings to use test database
+        from neutronapi.conf import settings
+        if hasattr(settings, '_settings') and 'DATABASES' in settings._settings:
+            settings._settings['DATABASES']['default']['NAME'] = test_db_name
+            
+        try:
+            # Connect to postgres db to manage test databases
+            conn = await asyncpg.connect(
+                host=db_config.get('HOST', 'localhost'),
+                port=db_config.get('PORT', 5432),
+                database='postgres',
+                user=db_config.get('USER', 'postgres'),
+                password=db_config.get('PASSWORD', ''),
+            )
+            
+            # Clean up any dangling test databases from previous runs
+            print("Cleaning up any dangling test databases...")
+            dangling_dbs = await conn.fetch(
+                "SELECT datname FROM pg_database WHERE datname LIKE 'test_%'"
+            )
+            for db_row in dangling_dbs:
+                db_name = db_row['datname']
+                print(f"Dropping dangling test database: {db_name}")
+                await conn.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+            
+            # Create our test database
+            await conn.execute(f'CREATE DATABASE "{test_db_name}"')
+            await conn.close()
+            
+            print(f"Created clean test database: {test_db_name}")
+        except Exception as e:
+            print(f"Warning: Could not create test database: {e}")
+
+    async def _setup_test_sqlite(self, db_config: dict):
+        """Setup in-memory SQLite for tests."""
+        from neutronapi.conf import settings
+        if hasattr(settings, '_settings') and 'DATABASES' in settings._settings:
+            settings._settings['DATABASES']['default']['NAME'] = ':memory:'
+            print("Using in-memory SQLite for tests")
+
+    async def _cleanup_test_database(self):
+        """Clean up test database if we created one."""
+        try:
+            from neutronapi.conf import settings
+            if hasattr(settings, '_settings') and 'DATABASES' in settings._settings:
+                db_config = settings._settings['DATABASES']['default']
+                db_name = db_config.get('NAME', '')
+                engine = db_config.get('ENGINE', '').lower()
+                
+                if engine == 'asyncpg' and db_name.startswith('test_') and not self._pg_container:
+                    # Only cleanup if we created a test database on existing server
+                    import asyncpg
+                    conn = await asyncpg.connect(
+                        host=db_config.get('HOST', 'localhost'),
+                        port=db_config.get('PORT', 5432),
+                        database='postgres',
+                        user=db_config.get('USER', 'postgres'),
+                        password=db_config.get('PASSWORD', ''),
+                    )
+                    await conn.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+                    await conn.close()
+                    print(f"Cleaned up test database: {db_name}")
+        except Exception as e:
+            print(f"Warning: Could not cleanup test database: {e}")
 
     async def _run_async(self, *cmd: str, timeout: Optional[float] = None) -> Tuple[int, str, str]:
         """Run a subprocess asynchronously and capture output."""
@@ -158,28 +226,22 @@ class Command:
             print(f"Error waiting for PostgreSQL: {e}")
             return False
 
-        # Configure environment for tests
+        # Update settings with container connection info
         try:
-            os.environ['TESTING'] = '1'
-            os.environ['PGHOST'] = host
-            os.environ['PGPORT'] = str(port)
-            os.environ['PGDATABASE'] = dbname
-            os.environ['PGUSER'] = user
-            os.environ['PGPASSWORD'] = password
-
-            # Force database system to use the new config
-            from neutronapi.db import setup_databases
-            test_config = {
-                'default': {
-                    'ENGINE': 'asyncpg',
+            from neutronapi.conf import settings
+            if hasattr(settings, '_settings') and 'DATABASES' in settings._settings:
+                # Update the existing database config with container details
+                db_config = settings._settings['DATABASES']['default']
+                db_config.update({
                     'HOST': host,
                     'PORT': port,
                     'NAME': dbname,
                     'USER': user,
                     'PASSWORD': password,
-                }
-            }
-            setup_databases(test_config)
+                })
+                print(f'Updated database config: {db_config}')
+            else:
+                print("Warning: Could not update database settings")
 
             print(f'✓ PostgreSQL ready at {host}:{port}/{dbname}')
             return True
@@ -221,7 +283,28 @@ class Command:
             print(self.handle.__doc__)
             return
 
-        # Use existing database configuration - no custom bootstrapping needed
+        # Check database configuration and setup test database
+        from neutronapi.conf import settings
+        if hasattr(settings, 'DATABASES'):
+            db_config = settings.DATABASES.get('default', {})
+            engine = db_config.get('ENGINE', '').lower()
+            
+            if engine == 'asyncpg':
+                # For PostgreSQL, check if user has existing server or use Docker
+                if not await self._has_existing_postgres_server(db_config):
+                    print("No existing PostgreSQL server found, bootstrapping test database container...")
+                    success = await self._bootstrap_postgres()
+                    if not success:
+                        print("Failed to bootstrap PostgreSQL container. Tests may fail.")
+                        return 1
+                else:
+                    print("Using existing PostgreSQL server for tests...")
+                    await self._setup_test_database(db_config)
+            elif engine == 'aiosqlite':
+                # For SQLite, always use in-memory test database
+                await self._setup_test_sqlite(db_config)
+        else:
+            print("Warning: No DATABASES configuration found")
 
         # Apply project migrations (if any) using the file-based tracker
         async def apply_project_migrations():
@@ -450,6 +533,14 @@ class Command:
                 print("Warning: Database cleanup timed out")
             except Exception as e:
                 print(f"Warning: Database cleanup failed: {e}")
+            
+            # Cleanup test database if needed
+            try:
+                await asyncio.wait_for(self._cleanup_test_database(), timeout=3.0)
+            except asyncio.TimeoutError:
+                print("Warning: Test database cleanup timed out")
+            except Exception as e:
+                print(f"Warning: Test database cleanup failed: {e}")
             
             # Best-effort: stop ephemeral postgres if we started it
             try:

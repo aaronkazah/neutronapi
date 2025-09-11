@@ -18,18 +18,25 @@ class TestModels(unittest.IsolatedAsyncioTestCase):
     
     async def asyncSetUp(self):
         """Set up test database before each test."""
-        # Create temporary SQLite database for testing
-        self.temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
-        self.temp_db.close()
+        provider = os.environ.get('DATABASE_PROVIDER', '').lower()
         
-        # Setup database configuration
-        db_config = {
-            'default': {
-                'ENGINE': 'aiosqlite',
-                'NAME': self.temp_db.name,
+        if provider in ('asyncpg', 'postgres', 'postgresql'):
+            # Use the existing PostgreSQL test database setup
+            from neutronapi.conf import settings
+            self.db_manager = setup_databases()
+        else:
+            # Create temporary SQLite database for testing
+            self.temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
+            self.temp_db.close()
+            
+            # Setup database configuration
+            db_config = {
+                'default': {
+                    'ENGINE': 'aiosqlite',
+                    'NAME': self.temp_db.name,
+                }
             }
-        }
-        self.db_manager = setup_databases(db_config)
+            self.db_manager = setup_databases(db_config)
         
         # Create the table using migration system
         from neutronapi.db.migrations import CreateModel
@@ -47,12 +54,20 @@ class TestModels(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         """Clean up after each test."""
-        await self.db_manager.close_all()
-        # Remove temp database file
+        # Clean up test data
         try:
-            os.unlink(self.temp_db.name)
-        except:
+            await TestUser.objects.all().delete()
+        except Exception:
             pass
+            
+        await self.db_manager.close_all()
+        
+        # Remove temp database file if using SQLite
+        if hasattr(self, 'temp_db'):
+            try:
+                os.unlink(self.temp_db.name)
+            except:
+                pass
 
     async def test_model_objects_attribute_exists(self):
         """Test that Model.objects exists and has required methods."""

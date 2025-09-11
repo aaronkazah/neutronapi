@@ -61,8 +61,6 @@ class SQLiteProvider(BaseProvider):
                 stmt = f"PRAGMA {k}={int(v)}"
             await self.conn.execute(stmt)
 
-        await self.create_tables()
-
     async def disconnect(self):
         if self.conn:
             await self.conn.close()
@@ -93,40 +91,6 @@ class SQLiteProvider(BaseProvider):
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
-    async def create_tables(self):
-        await self._ensure_connected()
-        sql = """
-        CREATE TABLE IF NOT EXISTS objects (
-            id TEXT PRIMARY KEY,
-            key TEXT UNIQUE NOT NULL,
-            name TEXT,
-            kind TEXT NOT NULL DEFAULT 'file',
-            meta TEXT,
-            store TEXT,
-            connections TEXT,
-            folder TEXT,
-            parent TEXT,
-            sha256 TEXT,
-            size INTEGER,
-            content_type TEXT,
-            latest_revision TEXT,
-            vec BLOB,
-            created TIMESTAMP,
-            modified TIMESTAMP
-        )
-        """
-
-        await self.conn.execute(sql)
-        indexes = [
-            "CREATE INDEX IF NOT EXISTS idx_objects_key ON objects(key)",
-            "CREATE INDEX IF NOT EXISTS idx_objects_folder ON objects(folder)",
-            "CREATE INDEX IF NOT EXISTS idx_objects_parent ON objects(parent)",
-            "CREATE INDEX IF NOT EXISTS idx_objects_kind ON objects(kind)",
-            "CREATE INDEX IF NOT EXISTS idx_objects_modified ON objects(modified)",
-        ]
-        for idx in indexes:
-            await self.conn.execute(idx)
-        await self.conn.commit()
 
     def serialize(self, data: Any) -> Optional[str]:
         if data is None:

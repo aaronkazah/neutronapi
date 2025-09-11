@@ -1,4 +1,3 @@
-import os
 import unittest
 
 from neutronapi.db.models import Model
@@ -7,7 +6,38 @@ from neutronapi.db.connection import setup_databases, get_databases
 from neutronapi.db.migrations import CreateModel
 
 
-@unittest.skipUnless(os.getenv('DATABASE_PROVIDER', '').lower() == 'asyncpg', 'PostgreSQL tests disabled (set DATABASE_PROVIDER=asyncpg)')
+def _is_postgres_configured():
+    """Check if default database is configured for PostgreSQL and accessible."""
+    try:
+        from neutronapi.conf import settings
+        import asyncio
+        import asyncpg
+        
+        db_config = settings.DATABASES.get('default', {})
+        if db_config.get('ENGINE', '').lower() != 'asyncpg':
+            return False
+            
+        # Try to connect to verify PostgreSQL is actually available
+        async def check_connection():
+            try:
+                conn = await asyncpg.connect(
+                    host=db_config.get('HOST', 'localhost'),
+                    port=db_config.get('PORT', 5432),
+                    database='postgres',
+                    user=db_config.get('USER', 'postgres'),
+                    password=db_config.get('PASSWORD', 'postgres'),
+                )
+                await conn.close()
+                return True
+            except:
+                return False
+        
+        return asyncio.run(check_connection())
+    except:
+        return False
+
+
+@unittest.skipUnless(_is_postgres_configured(), 'PostgreSQL not configured in settings.DATABASES')
 class TestMigrationsFTSPostgres(unittest.IsolatedAsyncioTestCase):
     class Post(Model):
         title = CharField()
@@ -15,25 +45,11 @@ class TestMigrationsFTSPostgres(unittest.IsolatedAsyncioTestCase):
 
         class Meta:
             search_fields = ("title", "body")
-            search_config = os.getenv('PG_TSVECTOR_CONFIG') or 'english'
+            search_config = 'english'
 
     async def asyncSetUp(self):
-        db_name = os.getenv('PGDATABASE', 'temp_db')
-        db_host = os.getenv('PGHOST', 'localhost')
-        db_port = int(os.getenv('PGPORT', '5432'))
-        db_user = os.getenv('PGUSER', 'postgres')
-        db_pass = os.getenv('PGPASSWORD', '')
-        cfg = {
-            'default': {
-                'ENGINE': 'asyncpg',
-                'NAME': db_name,
-                'HOST': db_host,
-                'PORT': db_port,
-                'USER': db_user,
-                'PASSWORD': db_pass,
-            }
-        }
-        self.db_manager = setup_databases(cfg)
+        # Use existing settings.DATABASES configuration
+        self.db_manager = setup_databases()
         self.conn = await get_databases().get_connection('default')
 
     async def asyncTearDown(self):

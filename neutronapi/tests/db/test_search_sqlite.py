@@ -15,6 +15,13 @@ class TestDoc(Model):
 
 
 class TestSearchSQLite(unittest.IsolatedAsyncioTestCase):
+    def _should_skip_for_provider(self):
+        """Skip SQLite-specific tests when running with non-SQLite providers"""
+        import os
+        provider = os.environ.get('DATABASE_PROVIDER', '').lower()
+        if provider in ('asyncpg', 'postgres', 'postgresql'):
+            self.skipTest('SQLite-specific test skipped when running with PostgreSQL provider')
+            
     async def asyncTearDown(self):
         if hasattr(self, 'db_manager'):
             await self.db_manager.close_all()
@@ -37,6 +44,7 @@ class TestSearchSQLite(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_search_like_fallback_sqlite(self):
+        self._should_skip_for_provider()
         # Setup SQLite without FTS configuration -> LIKE fallback
         self.temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
         self.temp_db.close()
@@ -60,6 +68,7 @@ class TestSearchSQLite(unittest.IsolatedAsyncioTestCase):
         self.assertCountEqual([r[0] for r in rows], ['d1', 'd2'])
 
     async def test_search_sqlite_fts5_match(self):
+        self._should_skip_for_provider()
         # Setup SQLite with FTS5 configuration
         self.temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
         self.temp_db.close()
@@ -101,6 +110,7 @@ class TestSearchSQLite(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(found[0][0], 'd3')
 
     async def test_search_sqlite_fts5_order_by_rank(self):
+        self._should_skip_for_provider()
         # Setup SQLite with FTS5 configuration
         self.temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
         self.temp_db.close()

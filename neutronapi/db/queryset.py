@@ -74,7 +74,7 @@ class QuerySet(Generic[T]):
     def __init__(self, model_cls):
         # Simple constructor that takes a Model class, like the old working code
         self.model = model_cls
-        self.table = model_cls.get_table_name()
+        self.table = None  # Will be set based on provider type
         self._model_class = model_cls
         
         # Database access is deferred until needed
@@ -106,10 +106,15 @@ class QuerySet(Generic[T]):
                 pass
         self._json_fields = derived_json
     
+    def _get_table_identifier(self, provider):
+        """Get the correct table identifier using the provider's method."""
+        schema, table = self.model._get_parsed_table_name()
+        return provider.get_table_identifier(schema, table)
+    
     async def _get_provider(self):
         """Get and cache the database provider, and initialize dialect flags."""
         if hasattr(self, '_model_class'):
-            from .connection import get_databases
+            from .connection import get_databases, DatabaseType
             db_manager = get_databases()
             connection = await db_manager.get_connection()
             provider = connection.provider
@@ -118,6 +123,9 @@ class QuerySet(Generic[T]):
             # Initialize dialect flag before any SQL construction
             if self._is_sqlite is None:
                 self._is_sqlite = 'sqlite' in provider.__class__.__name__.lower()
+            # Initialize table name based on provider type
+            if self.table is None:
+                self.table = self._get_table_identifier(provider)
             return provider
         else:
             # If provider already set externally, ensure dialect flag is set
@@ -331,14 +339,15 @@ class QuerySet(Generic[T]):
         return results[0] if results else None
 
     async def count(self) -> int:
+        # Ensure provider/dialect is initialized BEFORE cloning
+        provider = await self._get_provider()
+        
         qs = self._clone()
         qs._select_fields = ["COUNT(*)"]
         qs._order_by = []
         qs._limit_count = None
         qs._offset_count = None
 
-        # Ensure provider/dialect is initialized before constructing SQL
-        provider = await self._get_provider()
         sql, params = qs._build_query()
         result = await provider.fetchone(sql, tuple(params))
 
@@ -480,6 +489,10 @@ class QuerySet(Generic[T]):
         qs._values_mode = self._values_mode
         qs._values_fields = self._values_fields.copy()
         qs._values_flat = self._values_flat
+        # Copy provider-specific state
+        qs.table = self.table
+        qs.provider = self.provider
+        qs._is_sqlite = self._is_sqlite
         return qs
 
     def _build_where_clause(self, param_start: int = 1) -> tuple:

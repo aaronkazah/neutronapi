@@ -39,9 +39,9 @@ class BaseProvider(ABC):
         """Get multiple parameter placeholders for this database dialect."""
         pass
 
-    @abstractmethod
-    async def create_tables(self):
-        pass
+    def get_table_identifier(self, app_label: str, table_base_name: str) -> str:
+        """Get the table identifier for queries. Override in provider if needed."""
+        return f'"{app_label}_{table_base_name}"'
 
     @abstractmethod
     def serialize(self, value: Any) -> str:

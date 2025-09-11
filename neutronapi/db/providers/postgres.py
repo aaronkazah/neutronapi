@@ -45,7 +45,6 @@ class PostgreSQLProvider(BaseProvider):
             self._server_settings = None
 
         await self._ensure_connectivity()
-        await self.create_tables()
 
     async def _ensure_connectivity(self):
         try:
@@ -106,45 +105,6 @@ class PostgreSQLProvider(BaseProvider):
             rows = await conn.fetch(query, *params)
             return [dict(row) for row in rows]
 
-    async def create_tables(self):
-        import asyncpg
-        sql = """
-        CREATE TABLE IF NOT EXISTS objects (
-            id TEXT PRIMARY KEY,
-            key TEXT UNIQUE NOT NULL,
-            name TEXT,
-            kind TEXT NOT NULL DEFAULT 'file',
-            meta JSONB,
-            store JSONB,
-            connections JSONB,
-            folder TEXT,
-            parent TEXT,
-            sha256 TEXT,
-            size INTEGER,
-            content_type TEXT,
-            latest_revision TEXT,
-            vec BYTEA,
-            created TIMESTAMP WITH TIME ZONE,
-            modified TIMESTAMP WITH TIME ZONE
-        )
-        """
-        connect_kwargs = dict(self._conn_kwargs)
-        if self._server_settings:
-            connect_kwargs['server_settings'] = self._server_settings
-        conn = await asyncpg.connect(**connect_kwargs)
-        try:
-            await conn.execute(sql)
-            indexes = [
-                "CREATE INDEX IF NOT EXISTS idx_objects_key ON objects(key)",
-                "CREATE INDEX IF NOT EXISTS idx_objects_folder ON objects(folder)",
-                "CREATE INDEX IF NOT EXISTS idx_objects_parent ON objects(parent)",
-                "CREATE INDEX IF NOT EXISTS idx_objects_kind ON objects(kind)",
-                "CREATE INDEX IF NOT EXISTS idx_objects_modified ON objects(modified)",
-            ]
-            for idx in indexes:
-                await conn.execute(idx)
-        finally:
-            await conn.close()
 
     def serialize(self, data: Any) -> Any:
         if data is None:
@@ -268,6 +228,7 @@ class PostgreSQLProvider(BaseProvider):
     async def create_table(self, app_label: str, table_base_name: str, fields: List[Tuple[str, Any]]):
         schema = self._pg_ident(app_label)
         table = self._pg_ident(table_base_name)
+        
         await self.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
         if await self.table_exists(f"{app_label}.{table_base_name}"):
             return
@@ -294,7 +255,9 @@ class PostgreSQLProvider(BaseProvider):
             field_defs.append(" ".join(parts))
         if primary_keys:
             field_defs.append(f"PRIMARY KEY ({', '.join(primary_keys)})")
-        await self.execute(f"CREATE TABLE {schema}.{table} ({', '.join(field_defs)})")
+        
+        create_sql = f"CREATE TABLE {schema}.{table} ({', '.join(field_defs)})"
+        await self.execute(create_sql)
 
     async def drop_table(self, app_label: str, table_base_name: str):
         await self.execute(f"DROP TABLE IF EXISTS {self._pg_ident(app_label)}.{self._pg_ident(table_base_name)} CASCADE")
@@ -355,6 +318,10 @@ class PostgreSQLProvider(BaseProvider):
     def get_placeholders(self, count: int) -> str:
         """Get multiple numbered placeholders for PostgreSQL."""
         return ", ".join([f"${i+1}" for i in range(count)])
+
+    def get_table_identifier(self, app_label: str, table_base_name: str) -> str:
+        """Get the table identifier for PostgreSQL queries using schema.table format."""
+        return f"{self._pg_ident(app_label)}.{self._pg_ident(table_base_name)}"
 
     # Full-text search condition builder
     def build_search_condition(

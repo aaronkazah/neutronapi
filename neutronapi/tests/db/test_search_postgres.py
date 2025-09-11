@@ -1,4 +1,3 @@
-import os
 import unittest
 
 from neutronapi.db.models import Model
@@ -6,7 +5,6 @@ from neutronapi.db.fields import CharField, TextField
 from neutronapi.db.connection import setup_databases, get_databases
 
 
-@unittest.skipUnless(os.getenv('DATABASE_PROVIDER', '').lower() == 'asyncpg', 'PostgreSQL tests disabled (set DATABASE_PROVIDER=asyncpg)')
 class TestSearchPostgres(unittest.IsolatedAsyncioTestCase):
     class TestDoc(Model):
         key = CharField(null=False)
@@ -14,32 +12,38 @@ class TestSearchPostgres(unittest.IsolatedAsyncioTestCase):
         body = TextField(null=True)
 
     async def asyncSetUp(self):
-        # Use environment-backed Postgres config similar to other PG tests
-        db_name = os.getenv('PGDATABASE', 'temp_db')
-        db_host = os.getenv('PGHOST', 'localhost')
-        db_port = int(os.getenv('PGPORT', '5432'))
-        db_user = os.getenv('PGUSER', 'postgres')
-        db_pass = os.getenv('PGPASSWORD', '')
-        cfg = {
-            'default': {
-                'ENGINE': 'asyncpg',
-                'NAME': db_name,
-                'HOST': db_host,
-                'PORT': db_port,
-                'USER': db_user,
-                'PASSWORD': db_pass,
-                'OPTIONS': {
-                    # Allow specifying a text search config through env if desired
-                    'TSVECTOR_CONFIG': os.getenv('PG_TSVECTOR_CONFIG'),
-                }
-            }
-        }
-        self.db_manager = setup_databases(cfg)
+        from neutronapi.conf import settings
+        # Require Postgres engine
+        db_config = settings.DATABASES.get('default', {})
+        if db_config.get('ENGINE', '').lower() != 'asyncpg':
+            self.skipTest('PostgreSQL not configured in settings.DATABASES')
+
+        try:
+            import asyncpg
+        except Exception:
+            self.skipTest('asyncpg not installed')
+
+        # Verify server reachability
+        try:
+            conn0 = await asyncpg.connect(
+                host=db_config.get('HOST', 'localhost'),
+                port=db_config.get('PORT', 5432),
+                database='postgres',
+                user=db_config.get('USER', 'postgres'),
+                password=db_config.get('PASSWORD', 'postgres'),
+            )
+            await conn0.close()
+        except Exception:
+            self.skipTest('PostgreSQL server not reachable')
+
+        # Use existing settings.DATABASES configuration
+        self.db_manager = setup_databases()
 
         # Create table via migrations
         from neutronapi.db.migrations import CreateModel
         conn = await get_databases().get_connection('default')
-        op = CreateModel('neutronapi.TestSearchPostgres_TestDoc', self.TestDoc._fields)
+        # Ensure table name matches Model.get_table_name() -> neutronapi_test_doc
+        op = CreateModel('neutronapi.TestDoc', self.TestDoc._fields)
         await op.database_forwards(
             app_label='neutronapi',
             provider=conn.provider,
@@ -49,6 +53,11 @@ class TestSearchPostgres(unittest.IsolatedAsyncioTestCase):
         )
 
     async def asyncTearDown(self):
+        # Clean up test data before closing connections
+        try:
+            await self.TestDoc.objects.all().delete()
+        except Exception:
+            pass
         await self.db_manager.close_all()
 
     async def test_full_text_search_matches(self):

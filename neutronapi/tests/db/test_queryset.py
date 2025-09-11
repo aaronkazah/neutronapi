@@ -20,7 +20,15 @@ class TestObject(Model):
 
 
 class TestQuerySetSQLite(unittest.IsolatedAsyncioTestCase):
+    def _should_skip_for_provider(self):
+        """Skip SQLite-specific tests when running with non-SQLite providers"""
+        provider = os.environ.get('DATABASE_PROVIDER', '').lower()
+        if provider in ('asyncpg', 'postgres', 'postgresql'):
+            self.skipTest('SQLite-specific test skipped when running with PostgreSQL provider')
+    
     async def asyncSetUp(self):
+        self._should_skip_for_provider()
+        
         # Create temporary SQLite database for testing
         self.temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
         self.temp_db.close()

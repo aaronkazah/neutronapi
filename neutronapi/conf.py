@@ -46,15 +46,72 @@ class Settings:
                 if not name.startswith('_')
             }
         except ImportError as e:
-            raise ImportError(
-                f"Could not import settings module '{settings_module}'. "
-                f"Make sure it exists and is importable. "
-                f"You can also set NEUTRONAPI_SETTINGS_MODULE environment variable. "
-                f"Error: {e}"
-            )
+            # Only provide default settings if we're developing/testing NeutronAPI itself
+            if settings_module == 'apps.settings' and self._is_neutronapi_development():
+                print("No settings module found. Using default test configuration for NeutronAPI core library.")
+                self._use_default_test_settings()
+            else:
+                raise ImportError(
+                    f"Could not import settings module '{settings_module}'. "
+                    f"Make sure it exists and is importable. "
+                    f"You can also set NEUTRONAPI_SETTINGS_MODULE environment variable. "
+                    f"Error: {e}"
+                )
 
         # Validate required settings
         self._validate_required_settings()
+
+    def _is_neutronapi_development(self):
+        """Check if we're in the NeutronAPI development/source directory."""
+        cwd = os.getcwd()
+        
+        # Check if we're in the NeutronAPI source repository
+        # Look for neutronapi package directory and setup.py/pyproject.toml
+        neutronapi_pkg = os.path.join(cwd, 'neutronapi')
+        setup_py = os.path.join(cwd, 'setup.py')
+        pyproject_toml = os.path.join(cwd, 'pyproject.toml')
+        
+        is_source_dir = (
+            os.path.isdir(neutronapi_pkg) and 
+            (os.path.isfile(setup_py) or os.path.isfile(pyproject_toml))
+        )
+        
+        # Also check if we can find neutronapi's own tests directory
+        neutronapi_tests = os.path.join(cwd, 'neutronapi', 'tests')
+        has_neutron_tests = os.path.isdir(neutronapi_tests)
+        
+        return is_source_dir and has_neutron_tests
+
+    def _use_default_test_settings(self):
+        """Use default test settings for NeutronAPI core library testing."""
+        import os
+        
+        # Determine database engine from environment
+        engine = 'aiosqlite'  # Default to SQLite
+        db_config = {
+            'ENGINE': 'aiosqlite',
+            'NAME': ':memory:',
+        }
+        
+        # Check if PostgreSQL is requested
+        if os.getenv('DATABASE_PROVIDER', '').lower() == 'asyncpg':
+            engine = 'asyncpg'
+            db_config = {
+                'ENGINE': 'asyncpg',
+                'HOST': '127.0.0.1',
+                'PORT': 5432,
+                'NAME': 'neutronapi_test',
+                'USER': 'postgres',
+                'PASSWORD': 'postgres',
+            }
+        
+        self._settings = {
+            'ENTRY': 'neutronapi.tests.entry:app',  # Dummy entry for tests
+            'DATABASES': {
+                'default': db_config
+            }
+        }
+        print(f"Using default test configuration with {engine}")
 
     def _validate_required_settings(self):
         """Validate that all required settings are present."""
