@@ -17,6 +17,7 @@ from enum import Enum
 from neutronapi.db.fields import EnumField, BaseField
 from neutronapi.db.connection import get_databases, DatabaseType
 from neutronapi.db.models import Model  # Import Model
+from neutronapi.db.migration_tracker import MigrationTracker
 
 
 class Migration:
@@ -370,6 +371,7 @@ class MigrationManager:
         self.base_dir = base_dir
         self.project_state = {}
         self._models_cache: Dict[str, List[Type[Model]]] = {}  # Use Model type hint
+        self.tracker = MigrationTracker(base_dir=base_dir)
 
     def _discover_apps(self, base_dir: str) -> List[str]:
         """
@@ -616,7 +618,6 @@ class MigrationManager:
         self,
         app_label: str,
         operations: List[Operation],
-        models: List[Type[Model]],  # Use Model type hint
     ) -> str:
         """Generate the content of a migration file"""
         operations_str = self._format_operations(operations)
@@ -625,19 +626,7 @@ class MigrationManager:
         # Get required enum imports based on the operations
         enum_imports = self._get_required_enum_imports(operations)
 
-        # Generate state hash from models used to generate this migration
-        state = {}
-        for model_class in models:
-            state[model_class.__name__] = {
-                "fields": dict(
-                    (name, field.describe())  # Use field.describe() for representation
-                    for name, field in model_class._fields.items()
-                )
-            }
-        # Pretty print JSON state hash
-        state_json = json.dumps(state, indent=4, sort_keys=True)
-
-        # Generate the file content with HASH at the bottom
+        # Generate the file content
         # Ensure all necessary imports are present
         return textwrap.dedent(
             f"""\
@@ -667,11 +656,6 @@ class Migration{migration_id}(Migration):
     operations = [
 {operations_str}
     ]
-
-# --- DO NOT EDIT BELOW THIS LINE ---
-# This hash represents the state of the models this migration was generated from.
-# It is used to detect changes for future migrations.
-HASH = {state_json}
 """
         )
 
@@ -721,6 +705,288 @@ HASH = {state_json}
             # Already prefixed (or has dots for other reasons, assume prefixed)
             return model_name
         return f"{app_label}.{model_name}"
+
+    def _detect_field_renames(
+        self,
+        model_name: str,
+        added_fields: set,
+        deleted_fields: set,
+        current_fields_state: dict,
+        previous_fields_state: dict,
+        model_class
+    ) -> dict:
+        """
+        Detect potential field renames by comparing field types and prompting user.
+        Returns dict mapping old_field_name -> new_field_name for confirmed renames.
+        """
+        if not added_fields or not deleted_fields:
+            return {}
+        
+        confirmed_renames = {}
+        
+        # Build potential rename candidates by comparing field types
+        rename_candidates = []
+        for deleted_field in deleted_fields:
+            deleted_desc = previous_fields_state.get(deleted_field, "")
+            for added_field in added_fields:
+                # Get current field description for comparison
+                if added_field in model_class._fields:
+                    added_desc = model_class._fields[added_field].describe()
+                    # If field types match, it's a potential rename
+                    if deleted_desc == added_desc:
+                        rename_candidates.append((deleted_field, added_field))
+        
+        # If no type matches found, still offer the option for simple renames
+        if not rename_candidates and len(added_fields) == 1 and len(deleted_fields) == 1:
+            deleted_field = next(iter(deleted_fields))
+            added_field = next(iter(added_fields))
+            rename_candidates.append((deleted_field, added_field))
+        
+        # Interactive prompts for each potential rename
+        for old_field, new_field in rename_candidates:
+            if old_field in confirmed_renames or new_field in confirmed_renames.values():
+                continue  # Skip if already handled
+                
+            print(f"\nDetected potential field rename in model '{model_name}':")
+            print(f"  Deleted field: '{old_field}'")
+            print(f"  Added field:   '{new_field}'")
+            
+            # Show field types for context
+            old_type = previous_fields_state.get(old_field, "unknown")
+            new_type = model_class._fields[new_field].describe() if new_field in model_class._fields else "unknown"
+            print(f"  Field types:   '{old_type}' -> '{new_type}'")
+            
+            while True:
+                response = input("Was this field renamed? (y/n): ").strip().lower()
+                if response in ('y', 'yes'):
+                    confirmed_renames[old_field] = new_field
+                    print(f"  -> Will rename '{old_field}' to '{new_field}'")
+                    break
+                elif response in ('n', 'no'):
+                    print(f"  -> Will delete '{old_field}' and add '{new_field}' as separate operations")
+                    break
+                else:
+                    print("Please enter 'y' or 'n'")
+        
+        return confirmed_renames
+
+    def _reconstruct_state_from_operations(self, operations: List, app_label: str) -> Dict:
+        """Reconstruct model state from migration operations."""
+        state = {}
+        
+        for op in operations:
+            if hasattr(op, '__class__'):
+                op_name = op.__class__.__name__
+            else:
+                continue
+                
+            if op_name == 'CreateModel':
+                # Extract model name without app_label prefix
+                model_name = op.model_name
+                if '.' in model_name:
+                    model_name = model_name.split('.')[-1]
+                
+                # Build fields dict from the model fields
+                fields_dict = {}
+                if hasattr(op, 'fields') and isinstance(op.fields, dict):
+                    for field_name, field_obj in op.fields.items():
+                        if hasattr(field_obj, 'describe'):
+                            fields_dict[field_name] = field_obj.describe()
+                        else:
+                            fields_dict[field_name] = str(field_obj)
+                
+                state[model_name] = {
+                    "fields": fields_dict
+                }
+                
+            elif op_name == 'AddField':
+                model_name = op.model_name
+                if '.' in model_name:
+                    model_name = model_name.split('.')[-1]
+                
+                if model_name not in state:
+                    state[model_name] = {"fields": {}}
+                
+                if hasattr(op.field, 'describe'):
+                    state[model_name]["fields"][op.field_name] = op.field.describe()
+                else:
+                    state[model_name]["fields"][op.field_name] = str(op.field)
+                    
+            elif op_name == 'RemoveField':
+                model_name = op.model_name
+                if '.' in model_name:
+                    model_name = model_name.split('.')[-1]
+                
+                if model_name in state and "fields" in state[model_name]:
+                    state[model_name]["fields"].pop(op.field_name, None)
+                    
+            elif op_name == 'RenameField':
+                model_name = op.model_name
+                if '.' in model_name:
+                    model_name = model_name.split('.')[-1]
+                
+                if model_name in state and "fields" in state[model_name]:
+                    fields = state[model_name]["fields"]
+                    if op.old_field_name in fields:
+                        fields[op.new_field_name] = fields.pop(op.old_field_name)
+                        
+            elif op_name == 'AlterField':
+                model_name = op.model_name
+                if '.' in model_name:
+                    model_name = model_name.split('.')[-1]
+                
+                if model_name in state and "fields" in state[model_name]:
+                    if hasattr(op.field, 'describe'):
+                        state[model_name]["fields"][op.field_name] = op.field.describe()
+                    else:
+                        state[model_name]["fields"][op.field_name] = str(op.field)
+                        
+            elif op_name == 'DeleteModel':
+                model_name = op.model_name
+                if '.' in model_name:
+                    model_name = model_name.split('.')[-1]
+                state.pop(model_name, None)
+                
+            elif op_name == 'RenameModel':
+                old_model_name = op.old_model_name
+                new_model_name = op.new_model_name
+                if '.' in old_model_name:
+                    old_model_name = old_model_name.split('.')[-1]
+                if '.' in new_model_name:
+                    new_model_name = new_model_name.split('.')[-1]
+                    
+                if old_model_name in state:
+                    state[new_model_name] = state.pop(old_model_name)
+        
+        return state
+
+    def _reconstruct_state_from_all_migrations(self, app_label: str, migration_files: List[str]) -> Dict:
+        """Reconstruct state by applying all migration operations in sequence."""
+        state = {}
+        migrations_dir = self.get_migrations_dir(app_label)
+        
+        # Process migration files in order
+        for migration_file in migration_files:
+            migration_path = os.path.join(migrations_dir, migration_file)
+            module_name = f"{app_label}.migrations.{migration_file[:-3]}"
+            
+            try:
+                # Dynamically import the migration module
+                spec = importlib.util.spec_from_file_location(module_name, migration_path)
+                if spec and spec.loader:
+                    migration_module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(migration_module)
+                    
+                    # Apply operations from this migration to build up state
+                    operations = None
+                    
+                    # First try to get operations directly from module
+                    if hasattr(migration_module, 'operations'):
+                        operations = migration_module.operations
+                    else:
+                        # Look for Migration class with operations
+                        for name, obj in vars(migration_module).items():
+                            if (hasattr(obj, '__bases__') and 
+                                any('Migration' in str(base) for base in obj.__bases__) and
+                                hasattr(obj, 'operations')):
+                                operations = obj.operations
+                                break
+                    
+                    if operations:
+                        # Apply each operation to update the state
+                        for op in operations:
+                            self._apply_operation_to_state(state, op, app_label)
+                            
+            except Exception as e:
+                print(f"Warning: Could not load migration {migration_file}: {e}")
+                continue
+                
+        return state
+
+    def _apply_operation_to_state(self, state: Dict, op, app_label: str) -> None:
+        """Apply a single operation to update the state."""
+        if hasattr(op, '__class__'):
+            op_name = op.__class__.__name__
+        else:
+            return
+            
+        if op_name == 'CreateModel':
+            # Extract model name without app_label prefix
+            model_name = op.model_name
+            if '.' in model_name:
+                model_name = model_name.split('.')[-1]
+            
+            # Build fields dict from the model fields
+            fields_dict = {}
+            if hasattr(op, 'fields') and isinstance(op.fields, dict):
+                for field_name, field_obj in op.fields.items():
+                    if hasattr(field_obj, 'describe'):
+                        fields_dict[field_name] = field_obj.describe()
+                    else:
+                        fields_dict[field_name] = str(field_obj)
+            
+            state[model_name] = {
+                "fields": fields_dict
+            }
+            
+        elif op_name == 'AddField':
+            model_name = op.model_name
+            if '.' in model_name:
+                model_name = model_name.split('.')[-1]
+            
+            if model_name not in state:
+                state[model_name] = {"fields": {}}
+            
+            if hasattr(op.field, 'describe'):
+                state[model_name]["fields"][op.field_name] = op.field.describe()
+            else:
+                state[model_name]["fields"][op.field_name] = str(op.field)
+                
+        elif op_name == 'RemoveField':
+            model_name = op.model_name
+            if '.' in model_name:
+                model_name = model_name.split('.')[-1]
+            
+            if model_name in state and "fields" in state[model_name]:
+                state[model_name]["fields"].pop(op.field_name, None)
+                
+        elif op_name == 'RenameField':
+            model_name = op.model_name
+            if '.' in model_name:
+                model_name = model_name.split('.')[-1]
+            
+            if model_name in state and "fields" in state[model_name]:
+                fields = state[model_name]["fields"]
+                if op.old_field_name in fields:
+                    fields[op.new_field_name] = fields.pop(op.old_field_name)
+                    
+        elif op_name == 'AlterField':
+            model_name = op.model_name
+            if '.' in model_name:
+                model_name = model_name.split('.')[-1]
+            
+            if model_name in state and "fields" in state[model_name]:
+                if hasattr(op.field, 'describe'):
+                    state[model_name]["fields"][op.field_name] = op.field.describe()
+                else:
+                    state[model_name]["fields"][op.field_name] = str(op.field)
+                    
+        elif op_name == 'DeleteModel':
+            model_name = op.model_name
+            if '.' in model_name:
+                model_name = model_name.split('.')[-1]
+            state.pop(model_name, None)
+            
+        elif op_name == 'RenameModel':
+            old_model_name = op.old_model_name
+            new_model_name = op.new_model_name
+            if '.' in old_model_name:
+                old_model_name = old_model_name.split('.')[-1]
+            if '.' in new_model_name:
+                new_model_name = new_model_name.split('.')[-1]
+                
+            if old_model_name in state:
+                state[new_model_name] = state.pop(old_model_name)
 
     def _detect_changes(
         self,
@@ -813,7 +1079,7 @@ HASH = {state_json}
                     previous_model_detail = json.loads(previous_model_detail)
                 except json.JSONDecodeError:
                     print(
-                        f"Error: Invalid JSON in previous state HASH for {model_name}. Cannot compare fields."
+                        f"Error: Invalid JSON in previous state for {model_name}. Cannot compare fields."
                     )
                     continue  # Skip field comparison for this model
 
@@ -832,14 +1098,22 @@ HASH = {state_json}
             current_field_names = set(current_fields_state.keys())
             previous_field_names = set(previous_fields_state.keys())
 
-            # --- Field Renaming (Basic Heuristic) ---
+            # --- Field Renaming Detection with User Prompts ---
             added_fields = current_field_names - previous_field_names
             deleted_fields = previous_field_names - current_field_names
-            # Simple case: one added, one deleted -> assume rename
-            if len(added_fields) == 1 and len(deleted_fields) == 1:
-                old_field = deleted_fields.pop()
-                new_field = added_fields.pop()
-                # TODO: Add smarter field type comparison for rename detection
+            
+            # Detect potential field renames by comparing types
+            confirmed_renames = self._detect_field_renames(
+                model_name=model_name,
+                added_fields=added_fields,
+                deleted_fields=deleted_fields,
+                current_fields_state=current_fields_state,
+                previous_fields_state=previous_fields_state,
+                model_class=model_class
+            )
+            
+            # Apply confirmed rename operations
+            for old_field, new_field in confirmed_renames.items():
                 operations.append(
                     RenameField(
                         model_name=prefixed_name,
@@ -848,11 +1122,14 @@ HASH = {state_json}
                     )
                 )
                 # Adjust sets for subsequent checks
-                current_field_names.remove(new_field)
-                previous_field_names.remove(old_field)
+                added_fields.discard(new_field)
+                deleted_fields.discard(old_field)
+                current_field_names.discard(new_field)
+                previous_field_names.discard(old_field)
                 # Add the renamed field to previous_fields_state for AlterField check
                 previous_fields_state[new_field] = previous_fields_state.pop(old_field)
                 previous_field_names.add(new_field)
+                current_field_names.add(new_field)
 
             # --- Added Fields ---
             for field_name in current_field_names - previous_field_names:
@@ -883,7 +1160,7 @@ HASH = {state_json}
                 current_desc = model_class._fields[field_name].describe()
                 previous_desc = previous_fields_state.get(
                     field_name
-                )  # Already a string from HASH/describe()
+                )  # Already a string from describe()
 
                 if current_desc != previous_desc:
                     if field_name in model_class._fields:
@@ -936,7 +1213,7 @@ HASH = {state_json}
         This method checks for gaps in migration files and returns empty state
         if any are detected, forcing regeneration of missing migrations.
         
-        If no gaps are detected, it loads the HASH from the latest migration file.
+        If no gaps are detected, it loads the state from the latest migration file.
         """
         state = {}
         migrations_dir = self.get_migrations_dir(app_label)
@@ -985,7 +1262,7 @@ HASH = {state_json}
                     sys.path.insert(0, self.base_dir)
                     path_added = True
                     
-                # Load the latest migration's HASH
+                # Load the latest migration's state (HASH for backward compatibility)
                 importlib.invalidate_caches()
                 if module_name in sys.modules:
                     del sys.modules[module_name]
@@ -996,14 +1273,23 @@ HASH = {state_json}
                     sys.modules[module_name] = migration_module
                     spec.loader.exec_module(migration_module)
                     
+                    # Check for HASH (backward compatibility with old migrations)
                     if hasattr(migration_module, "HASH") and isinstance(migration_module.HASH, dict):
                         # If latest migration has complete state, use it (gaps are ok)
                         print(
                             f"Missing migration files detected for {app_label}: "
                             f"{[str(n).zfill(4) + '_*.py' for n in missing_numbers]}. "
-                            f"Using state from latest migration {last_migration_file}."
+                            f"Using HASH state from latest migration {last_migration_file} (legacy format)."
                         )
                         return migration_module.HASH
+                    elif hasattr(migration_module, 'operations'):
+                        # Reconstruct state from all migration files in sequence
+                        print(
+                            f"Missing migration files detected for {app_label}: "
+                            f"{[str(n).zfill(4) + '_*.py' for n in missing_numbers]}. "
+                            f"Reconstructing state from all available migrations."
+                        )
+                        return self._reconstruct_state_from_all_migrations(app_label, migration_files)
                         
             except Exception:
                 pass  # Fall through to empty state
@@ -1046,15 +1332,18 @@ HASH = {state_json}
                 )
                 spec.loader.exec_module(migration_module)
 
-                # Get the HASH dictionary directly from the module
+                # Get the HASH dictionary directly from the module (backward compatibility)
                 if hasattr(migration_module, "HASH") and isinstance(
                     migration_module.HASH, dict
                 ):
                     state = migration_module.HASH
                 else:
+                    # No HASH found - try to reconstruct state from migration operations
                     print(
-                        f"Warning: No valid HASH dictionary found in {module_name}. Using empty state."
+                        f"No HASH found in {module_name}. Reconstructing state from migration operations."
                     )
+                    # Reconstruct state from all migrations in sequence
+                    state = self._reconstruct_state_from_all_migrations(app_label, migration_files)
             else:
                 print(f"Error: Could not create module spec for {module_path}")
 
@@ -1197,6 +1486,60 @@ HASH = {state_json}
 
         return migrations_dict
 
+    async def _build_state_from_database(self, app_label: str) -> Dict:
+        """
+        Build the previous state by querying the database for applied migrations
+        and loading their operations to reconstruct the state.
+        """
+        try:
+            # Get database connection
+            db_manager = get_databases()
+            connection = await db_manager.get_connection('default')
+            
+            # Ensure migration tracking table exists
+            await self.tracker.ensure_migration_table(connection)
+            
+            # Get applied migrations for this app from database
+            applied_migrations = await self.tracker.get_applied_migrations(connection, app_label)
+            
+            # Build state by replaying applied migrations
+            state = {}
+            
+            for migration_record in applied_migrations:
+                # Load the migration file
+                migration_files = self.tracker.discover_migration_files()
+                app_files = migration_files.get(app_label, [])
+                
+                # Find the matching migration file
+                matching_file = None
+                for migration_file in app_files:
+                    if migration_file.migration_name == migration_record.migration_name:
+                        matching_file = migration_file
+                        break
+                
+                if matching_file and matching_file.module:
+                    # Extract state from migration operations
+                    if hasattr(matching_file.module, 'operations'):
+                        for operation in matching_file.module.operations:
+                            if hasattr(operation, 'model_name') and hasattr(operation, 'fields'):
+                                # This is a CreateModel operation
+                                model_name = operation.model_name.split('.')[-1]  # Remove app prefix
+                                if hasattr(operation, 'fields'):
+                                    state[model_name] = {
+                                        "fields": {
+                                            name: field.describe() if hasattr(field, 'describe') else str(field)
+                                            for name, field in operation.fields.items()
+                                        }
+                                    }
+                                    
+            return state
+            
+        except Exception as e:
+            # Fallback to empty state if database tracking fails
+            print(f"Warning: Could not load state from database tracking: {e}")
+            print("Falling back to empty state for first migration generation")
+            return {}
+
     async def makemigrations(
         self,
         app_label: str,
@@ -1237,7 +1580,7 @@ HASH = {state_json}
                     f"Warning: Item '{model_class}' in models list for '{app_label}' is not a valid Model subclass."
                 )
 
-        # 3. Build previous state from the HASH in the last migration file
+        # 3. Build previous state from the last migration file (HASH for backward compatibility)
         if clean:
             # 'clean' mode ignores previous state, useful for initial/test migrations
             previous_state = {}
@@ -1251,7 +1594,7 @@ HASH = {state_json}
                 with open(init_path, "w") as f:
                     f.write("")
 
-            # This function now loads the HASH dict
+            # Use file-based state (fallback to HASH for backward compatibility)
             previous_state = self._build_state_from_migrations(app_label)
 
         # 4. Detect changes between previous and current states
@@ -1274,7 +1617,6 @@ HASH = {state_json}
                 migration_content = self._generate_migration_file_content(
                     app_label=app_label,
                     operations=operations,
-                    models=models,  # Pass models for HASH
                 )
 
                 filepath = os.path.join(migrations_dir, migration_filename)
@@ -1327,49 +1669,61 @@ HASH = {state_json}
                 raise
             return  # Finish after applying direct operations
 
-            # --- Normal migration process using files ---
-            migrations_dir = self.get_migrations_dir(app_label)
-
-            if not os.path.exists(migrations_dir):
-                print(
-                    f"No migrations directory found for {app_label}. Nothing to migrate."
-                )
-                return
-
-            # Get all migration files, sorted numerically
+        # --- Use MigrationTracker for file-based migrations ---
+        try:
+            # Use MigrationTracker to apply all unapplied migrations
+            await self.tracker.migrate(connection)
+        except Exception as e:
+            print(f"ERROR during migration application: {e}")
+            # Attempt to rollback
             try:
-                all_migrations = await self.get_migrations(app_label)
-                app_migrations = all_migrations.get(app_label, [])
-            except Exception as e:
-                print(f"Failed to load migrations for {app_label}: {e}")
-                raise  # Stop if loading fails
-
-            if not app_migrations:
-                print(f"No migration files found for {app_label}. Nothing to migrate.")
-                return
-
-            applied_count = 0
-            try:
-                for migration in app_migrations:
-                    # Apply the migration using the schema editor
-                    await migration.apply(
-                        project_state=self.project_state,  # Pass state if needed by operations
-                        provider=provider,
-                        connection=connection,
-                    )
-                    # Update project_state based on migration? (More complex)
-                    applied_count += 1
-
-                # Commit transaction after all migrations for the app are applied
-                if hasattr(connection, 'commit'):
-                    await connection.commit()
-
-            except Exception as e:
-                print(f"ERROR during migration application for {app_label}: {e}")
-                # Attempt to rollback
-                try:
+                if hasattr(connection, 'rollback'):
                     await connection.rollback()
-                except Exception as rb_err:
-                    print(f"Rollback failed: {rb_err}")
-                traceback.print_exc()
-                raise  # Re-raise the exception to indicate failure
+            except Exception as rb_err:
+                print(f"Rollback failed: {rb_err}")
+            traceback.print_exc()
+            raise  # Re-raise the exception to indicate failure
+
+    async def show_migrations(self, connection=None):
+        """Show migration status for all apps."""
+        if connection:
+            # Show applied vs unapplied migrations from database
+            await self.tracker.ensure_migration_table(connection)
+            applied_migrations = await self.tracker.get_applied_migrations(connection)
+            all_migrations = self.tracker.discover_migration_files()
+            
+            print("Migration Status:")
+            print("=" * 50)
+            
+            for app_label, migrations in all_migrations.items():
+                print(f"\n{app_label}:")
+                applied_for_app = applied_migrations.get(app_label, set())
+                
+                for migration_file in migrations:
+                    status = "✓ APPLIED" if migration_file.migration_name in applied_for_app else "✗ UNAPPLIED"
+                    print(f"  {migration_file.migration_name} ... {status}")
+                
+                if not migrations:
+                    print("  No migrations found")
+        else:
+            # Show discovered migration files only
+            self.tracker.show_migrations()
+
+    async def make_migrations(self, models: List[Type[Model]], app_label: str, connection=None):
+        """Generate migrations using file-based state."""
+        # Use file-based state (supports HASH for backward compatibility)
+        previous_state = self._build_state_from_migrations(app_label)
+        
+        # Generate current state from models
+        current_state = self._build_current_state(models, app_label)
+        
+        # Detect changes and generate migration
+        operations = self._detect_changes(previous_state, current_state, models, app_label)
+        
+        if not operations:
+            print(f"No changes detected for {app_label}")
+            return
+        
+        # Generate migration file
+        await self._write_migration_file(app_label, operations)
+        print(f"Generated migration for {app_label} with {len(operations)} operations")

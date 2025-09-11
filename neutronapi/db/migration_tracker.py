@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import List, Dict, Optional, Set
 
 from neutronapi.db.connection import DatabaseType
-from neutronapi.db.migrations import Migration
 
 
 class MigrationRecord:
@@ -59,6 +58,9 @@ class MigrationFile:
     @property
     def migration(self):
         """Get the Migration instance from the module."""
+        # Import Migration here to avoid circular import
+        from neutronapi.db.migrations import Migration
+        
         # First, try the simple module-level variable pattern
         m = getattr(self.module, 'migration', None)
         if m is not None:
@@ -315,3 +317,22 @@ class MigrationTracker:
             print(f"\n{app_label}:")
             for migration_file in migrations:
                 print(f"  {migration_file.migration_name}")
+
+    async def _build_state_from_database(self, connection) -> Dict:
+        """Build state dictionary from current database schema."""
+        state = {}
+        
+        # Get all applied migration records from the database
+        await self.ensure_migration_table(connection)
+        
+        # For now, return empty state since we'll need to introspect database schema
+        # This is a placeholder that can be expanded to read actual table structures
+        # from the database and convert them to the state format used by migrations
+        
+        # TODO: Implement actual database schema introspection
+        # This would involve:
+        # 1. Reading table names and structures from database
+        # 2. Converting them to the migration state format
+        # 3. Mapping them to app_label.model_name keys
+        
+        return state
