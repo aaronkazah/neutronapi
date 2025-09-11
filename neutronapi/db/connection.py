@@ -134,5 +134,14 @@ def setup_databases(config: Optional[Dict[str, Dict[str, Any]]] = None) -> Conne
 def get_databases() -> ConnectionsManager:
     global CONNECTIONS
     if CONNECTIONS is None:
-        CONNECTIONS = ConnectionsManager()
+        # Try to load database configuration from settings
+        try:
+            from neutronapi.conf import settings
+            if hasattr(settings, 'DATABASES'):
+                CONNECTIONS = ConnectionsManager(settings.DATABASES)
+            else:
+                CONNECTIONS = ConnectionsManager()
+        except Exception:
+            # If settings import fails, use default configuration
+            CONNECTIONS = ConnectionsManager()
     return CONNECTIONS

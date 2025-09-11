@@ -47,6 +47,16 @@ class Command:
                 base_dir = os.path.join(os.getcwd(), 'apps')
                 if not os.path.isdir(base_dir):
                     return
+                
+                # Setup databases with settings configuration (same as migrate command)
+                try:
+                    from apps.settings import DATABASES
+                    from neutronapi.db import setup_databases
+                    setup_databases(DATABASES)
+                except Exception:
+                    # If settings import fails, use default configuration
+                    pass
+                
                 tracker = MigrationTracker(base_dir='apps')
                 connection = await get_databases().get_connection('default')
                 unapplied = await tracker.get_unapplied_migrations(connection)
@@ -112,6 +122,11 @@ class Command:
                 "host": "127.0.0.1",
                 "port": 8000,
                 "reload": True,
+                "reload_dirs": [".", "apps"],  # Watch current directory (project root) and apps
+                "reload_excludes": ["venv/*", ".venv/*", "env/*", ".env/*", 
+                                   "__pycache__/*", "*.pyc", "*.pyo", "*.pyd",
+                                   ".git/*", ".pytest_cache/*", "*.egg-info/*",
+                                   "dist/*", "build/*", "node_modules/*"],
                 "access_log": True,
                 "log_level": "info",
             }
@@ -151,6 +166,24 @@ class Command:
                 uvicorn_kwargs["reload"] = True
             elif arg == "--no-reload":
                 uvicorn_kwargs["reload"] = False
+            elif arg == "--reload-dir":
+                if i + 1 < len(args):
+                    if "reload_dirs" not in uvicorn_kwargs:
+                        uvicorn_kwargs["reload_dirs"] = []
+                    uvicorn_kwargs["reload_dirs"].append(args[i + 1])
+                    i += 1
+                else:
+                    print("Error: --reload-dir requires a value")
+                    return
+            elif arg == "--reload-exclude":
+                if i + 1 < len(args):
+                    if "reload_excludes" not in uvicorn_kwargs:
+                        uvicorn_kwargs["reload_excludes"] = []
+                    uvicorn_kwargs["reload_excludes"].append(args[i + 1])
+                    i += 1
+                else:
+                    print("Error: --reload-exclude requires a value")
+                    return
             elif arg == "--workers":
                 if i + 1 < len(args):
                     try:
