@@ -257,7 +257,7 @@ class Model(metaclass=ModelBase):
         set_cols = []
         params = []
         index = 1
-        for fname, field in self._fields.items():
+        for fname, field in self._neutronapi_fields_.items():
             if fname == pk_name:
                 continue  # don't update the primary key
             db_col = getattr(field, 'db_column', None) or fname
