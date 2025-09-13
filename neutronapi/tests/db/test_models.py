@@ -43,7 +43,7 @@ class TestModels(unittest.IsolatedAsyncioTestCase):
         connection = await self.db_manager.get_connection()
         
         # Create table for TestUser model using migrations
-        create_operation = CreateModel('neutronapi.TestUser', TestUser._fields)
+        create_operation = CreateModel('neutronapi.TestUser', TestUser._neutronapi_fields_)
         await create_operation.database_forwards(
             app_label='neutronapi',
             provider=connection.provider, 

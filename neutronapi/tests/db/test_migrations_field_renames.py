@@ -68,7 +68,7 @@ class TestMigrationsFieldRenames(unittest.IsolatedAsyncioTestCase):
         from neutronapi.db.migrations import CreateModel
         connection = await self.db_manager.get_connection('default')
         model_name = f'test.TestFieldRenameModel{model_suffix}'
-        op = CreateModel(model_name, TestFieldRenameModel._fields)
+        op = CreateModel(model_name, TestFieldRenameModel._neutronapi_fields_)
         await op.database_forwards(
             app_label='test',
             provider=connection.provider,
@@ -84,12 +84,12 @@ class TestMigrationsFieldRenames(unittest.IsolatedAsyncioTestCase):
         
         # Mock model class with renamed field
         mock_model = Mock()
-        mock_model._fields = {
+        mock_model._neutronapi_fields_ = {
             'new_name': Mock(),
             'description': Mock(),
         }
-        mock_model._fields['new_name'].describe.return_value = "CharField(max_length=100, null=False)"
-        mock_model._fields['description'].describe.return_value = "TextField(null=True)"
+        mock_model._neutronapi_fields_['new_name'].describe.return_value = "CharField(max_length=100, null=False)"
+        mock_model._neutronapi_fields_['description'].describe.return_value = "TextField(null=True)"
         
         added_fields = {'new_name'}
         deleted_fields = {'name'}
@@ -121,12 +121,12 @@ class TestMigrationsFieldRenames(unittest.IsolatedAsyncioTestCase):
         
         # Mock model class with multiple renamed fields
         mock_model = Mock()
-        mock_model._fields = {
+        mock_model._neutronapi_fields_ = {
             'full_name': Mock(),
             'bio': Mock(),
         }
-        mock_model._fields['full_name'].describe.return_value = "CharField(max_length=100, null=False)"
-        mock_model._fields['bio'].describe.return_value = "TextField(null=True)"
+        mock_model._neutronapi_fields_['full_name'].describe.return_value = "CharField(max_length=100, null=False)"
+        mock_model._neutronapi_fields_['bio'].describe.return_value = "TextField(null=True)"
         
         added_fields = {'full_name', 'bio'}
         deleted_fields = {'name', 'description'}
@@ -159,10 +159,10 @@ class TestMigrationsFieldRenames(unittest.IsolatedAsyncioTestCase):
         manager = MigrationManager("test_apps")
         
         mock_model = Mock()
-        mock_model._fields = {
+        mock_model._neutronapi_fields_ = {
             'new_name': Mock(),
         }
-        mock_model._fields['new_name'].describe.return_value = "CharField(max_length=100, null=False)"
+        mock_model._neutronapi_fields_['new_name'].describe.return_value = "CharField(max_length=100, null=False)"
         
         added_fields = {'new_name'}
         deleted_fields = {'name'}
@@ -187,10 +187,10 @@ class TestMigrationsFieldRenames(unittest.IsolatedAsyncioTestCase):
         manager = MigrationManager("test_apps")
         
         mock_model = Mock()
-        mock_model._fields = {
+        mock_model._neutronapi_fields_ = {
             'count': Mock(),
         }
-        mock_model._fields['count'].describe.return_value = "IntegerField(null=True)"
+        mock_model._neutronapi_fields_['count'].describe.return_value = "IntegerField(null=True)"
         
         added_fields = {'count'}
         deleted_fields = {'name'}
@@ -389,10 +389,10 @@ class TestMigrationsFieldRenames(unittest.IsolatedAsyncioTestCase):
         
         # Test with unique constraint
         mock_model = Mock()
-        mock_model._fields = {
+        mock_model._neutronapi_fields_ = {
             'unique_name': Mock(),
         }
-        mock_model._fields['unique_name'].describe.return_value = "CharField(max_length=100, null=False, unique=True)"
+        mock_model._neutronapi_fields_['unique_name'].describe.return_value = "CharField(max_length=100, null=False, unique=True)"
         
         added_fields = {'unique_name'}
         deleted_fields = {'name'}

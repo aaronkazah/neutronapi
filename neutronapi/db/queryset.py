@@ -99,7 +99,7 @@ class QuerySet(Generic[T]):
         if hasattr(model_cls, '_fields'):
             try:
                 from .fields import JSONField
-                for fname, f in model_cls._fields.items():
+                for fname, f in model_cls._neutronapi_fields_.items():
                     if isinstance(f, JSONField):
                         derived_json.add(fname)
             except Exception:
@@ -316,7 +316,7 @@ class QuerySet(Generic[T]):
             order_field = None
             if self.model is not None and hasattr(self.model, '_fields'):
                 try:
-                    pk_fields = [name for name, f in self.model._fields.items() if getattr(f, 'primary_key', False)]
+                    pk_fields = [name for name, f in self.model._neutronapi_fields_.items() if getattr(f, 'primary_key', False)]
                     if len(pk_fields) == 1:
                         order_field = pk_fields[0]
                 except Exception:
@@ -535,7 +535,7 @@ class QuerySet(Generic[T]):
             return provider.build_search_condition(
                 self.table,
                 search_info,
-                self.model._fields,
+                self.model._neutronapi_fields_,
                 param_start,
                 self._is_sqlite or False,
             )
@@ -551,7 +551,7 @@ class QuerySet(Generic[T]):
         # If no specific fields provided, search all text-like fields
         if not search_fields:
             search_fields = []
-            for name, field in self.model._fields.items():
+            for name, field in self.model._neutronapi_fields_.items():
                 if hasattr(field, '__class__') and (
                     'CharField' in field.__class__.__name__ or 'TextField' in field.__class__.__name__
                 ):
@@ -668,8 +668,8 @@ class QuerySet(Generic[T]):
                             else:
                                 # Convert each item in the list using field's to_db method
                                 converted_values = []
-                                if hasattr(self.model, '_fields') and field_name in self.model._fields:
-                                    field = self.model._fields[field_name]
+                                if hasattr(self.model, '_neutronapi_fields_') and field_name in self.model._neutronapi_fields_:
+                                    field = self.model._neutronapi_fields_[field_name]
                                     for item in value:
                                         db_value = item
                                         if hasattr(field, 'to_db'):
@@ -713,28 +713,28 @@ class QuerySet(Generic[T]):
                             # For string-based lookups, don't apply provider conversion to datetime fields
                             if lookup_type in ['contains', 'icontains']:
                                 # String lookups - check if this makes sense for the field type
-                                if hasattr(self.model, '_fields') and field_name in self.model._fields:
-                                    field = self.model._fields[field_name]
+                                if hasattr(self.model, '_neutronapi_fields_') and field_name in self.model._neutronapi_fields_:
+                                    field = self.model._neutronapi_fields_[field_name]
                                     if hasattr(field, '__class__') and 'DateTimeField' in field.__class__.__name__:
                                         raise ValueError(f"Lookup '{lookup_type}' is not supported for DateTimeField")
                                 params.append(f"%{value}%")
                             elif lookup_type == 'startswith':
-                                if hasattr(self.model, '_fields') and field_name in self.model._fields:
-                                    field = self.model._fields[field_name]
+                                if hasattr(self.model, '_neutronapi_fields_') and field_name in self.model._neutronapi_fields_:
+                                    field = self.model._neutronapi_fields_[field_name]
                                     if hasattr(field, '__class__') and 'DateTimeField' in field.__class__.__name__:
                                         raise ValueError(f"Lookup 'startswith' is not supported for DateTimeField")
                                 params.append(f"{value}%")
                             elif lookup_type == 'endswith':
-                                if hasattr(self.model, '_fields') and field_name in self.model._fields:
-                                    field = self.model._fields[field_name]
+                                if hasattr(self.model, '_neutronapi_fields_') and field_name in self.model._neutronapi_fields_:
+                                    field = self.model._neutronapi_fields_[field_name]
                                     if hasattr(field, '__class__') and 'DateTimeField' in field.__class__.__name__:
                                         raise ValueError(f"Lookup 'endswith' is not supported for DateTimeField")
                                 params.append(f"%{value}")
                             else:
                                 # Comparison lookups - apply provider conversion for datetime fields
                                 db_value = value
-                                if hasattr(self.model, '_fields') and field_name in self.model._fields:
-                                    field = self.model._fields[field_name]
+                                if hasattr(self.model, '_neutronapi_fields_') and field_name in self.model._neutronapi_fields_:
+                                    field = self.model._neutronapi_fields_[field_name]
                                     if hasattr(field, 'to_db'):
                                         db_value = field.to_db(value)
                                         # Let the provider handle final conversion for query parameters
@@ -853,7 +853,7 @@ class QuerySet(Generic[T]):
                     rank_order_clause, rank_params = self.provider.build_search_order_by(
                         self.table,
                         search_info,
-                        self.model._fields,
+                        self.model._neutronapi_fields_,
                         next_index,
                         self._is_sqlite or False,
                     )

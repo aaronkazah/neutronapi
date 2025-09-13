@@ -362,7 +362,7 @@ class Command:
                     connection = await get_databases().get_connection('default')
                     
                     for model_cls in test_models:
-                        create_operation = CreateModel(f'neutronapi.{model_cls.__name__}', model_cls._fields)
+                        create_operation = CreateModel(f'neutronapi.{model_cls.__name__}', model_cls._neutronapi_fields_)
                         await create_operation.database_forwards(
                             app_label='neutronapi',
                             provider=connection.provider,

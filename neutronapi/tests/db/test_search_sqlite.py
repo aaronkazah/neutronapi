@@ -34,7 +34,7 @@ class TestSearchSQLite(unittest.IsolatedAsyncioTestCase):
     async def _create_table(self):
         from neutronapi.db.migrations import CreateModel
         connection = await self.db_manager.get_connection('default')
-        op = CreateModel('neutronapi.TestDoc', TestDoc._fields)
+        op = CreateModel('neutronapi.TestDoc', TestDoc._neutronapi_fields_)
         await op.database_forwards(
             app_label='neutronapi',
             provider=connection.provider,

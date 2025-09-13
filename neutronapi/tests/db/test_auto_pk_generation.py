@@ -27,7 +27,7 @@ class TestAutoPrimaryKey(unittest.IsolatedAsyncioTestCase):
 
         # Create the table backing AutoPKModel
         app_label, table_base = AutoPKModel._get_parsed_table_name()
-        await self.provider.create_table(app_label, table_base, list(AutoPKModel._fields.items()))
+        await self.provider.create_table(app_label, table_base, list(AutoPKModel._neutronapi_fields_.items()))
 
     async def asyncTearDown(self):
         try:

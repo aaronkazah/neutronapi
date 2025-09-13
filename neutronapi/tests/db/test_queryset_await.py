@@ -35,7 +35,7 @@ class TestQuerySetAwaitBehavior(unittest.IsolatedAsyncioTestCase):
         # Create table via migration op
         from neutronapi.db.migrations import CreateModel
         connection = await self.db_manager.get_connection()
-        op = CreateModel('neutronapi.AwaitUser', AwaitUser._fields)
+        op = CreateModel('neutronapi.AwaitUser', AwaitUser._neutronapi_fields_)
         await op.database_forwards(
             app_label='neutronapi',
             provider=connection.provider,

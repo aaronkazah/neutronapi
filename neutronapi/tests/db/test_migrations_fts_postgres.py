@@ -60,7 +60,7 @@ class TestMigrationsFTSPostgres(unittest.IsolatedAsyncioTestCase):
             'search_fields': getattr(self.Post.Meta, 'search_fields', ("title", "body")),
             'search_config': getattr(self.Post.Meta, 'search_config', None),
         }
-        op = CreateModel('neutronapi.Post', self.Post._fields, search_meta=search_meta)
+        op = CreateModel('neutronapi.Post', self.Post._neutronapi_fields_, search_meta=search_meta)
         await op.database_forwards('neutronapi', self.conn.provider, None, None, self.conn)
 
         schema, table = self.Post._get_parsed_table_name()

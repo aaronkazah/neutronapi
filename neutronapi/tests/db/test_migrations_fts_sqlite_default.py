@@ -36,7 +36,7 @@ class TestMigrationsFTSSQLiteDefault(unittest.IsolatedAsyncioTestCase):
         conn = await get_databases().get_connection('default')
 
         # No search_meta provided -> defaults inferred and FTS should be created
-        op = CreateModel('neutronapi.Note', Note._fields)
+        op = CreateModel('neutronapi.Note', Note._neutronapi_fields_)
         await op.database_forwards('neutronapi', conn.provider, None, None, conn)
 
         base_table = Note.get_table_name()

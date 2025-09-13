@@ -35,10 +35,19 @@ class ModelBase(type):
     def __new__(mcls, name, bases, attrs):
         fields: Dict[str, BaseField] = {}
         for base in bases:
-            if hasattr(base, "_fields"):
-                fields.update(getattr(base, "_fields"))
+            if hasattr(base, "_neutronapi_fields_"):
+                fields.update(getattr(base, "_neutronapi_fields_"))
 
         own_fields = {k: v for k, v in list(attrs.items()) if isinstance(v, BaseField)}
+        
+        # Validate that no fields use reserved NeutronAPI internal names
+        for field_name in own_fields:
+            if field_name.startswith('_neutronapi_') and field_name.endswith('_'):
+                raise ValueError(
+                    f"Field name '{field_name}' is reserved for NeutronAPI internal use. "
+                    f"Names matching pattern '_neutronapi_*_' are not allowed."
+                )
+        
         for k in own_fields:
             attrs.pop(k)
 
@@ -56,13 +65,13 @@ class ModelBase(type):
             else:
                 setattr(field, '_name', fname)
 
-        cls._fields = fields
+        cls._neutronapi_fields_ = fields
         
         return cls
 
 
 class Model(metaclass=ModelBase):
-    _fields: Dict[str, BaseField]
+    _neutronapi_fields_: Dict[str, BaseField]
     DoesNotExist = None
 
     def __init_subclass__(cls, **kwargs):
@@ -73,7 +82,7 @@ class Model(metaclass=ModelBase):
         })
 
     def __init__(self, **kwargs: Any):
-        for name, field in self._fields.items():
+        for name, field in self._neutronapi_fields_.items():
             if name in kwargs:
                 value = kwargs[name]
                 # Convert enum to its value if needed
@@ -101,7 +110,7 @@ class Model(metaclass=ModelBase):
     def describe(cls) -> Dict[str, Any]:
         return {
             'model': cls.__name__,
-            'fields': {name: field.describe() for name, field in cls._fields.items()},
+            'fields': {name: field.describe() for name, field in cls._neutronapi_fields_.items()},
         }
 
     @classmethod
@@ -183,7 +192,7 @@ class Model(metaclass=ModelBase):
         table_ident = f"{self._quote(schema)}.{self._quote(table)}" if is_pg else self._quote(f"{schema}_{table}")
 
         # Determine primary key
-        pk_fields = [name for name, f in self._fields.items() if getattr(f, 'primary_key', False)]
+        pk_fields = [name for name, f in self._neutronapi_fields_.items() if getattr(f, 'primary_key', False)]
         pk_name = pk_fields[0] if len(pk_fields) == 1 else None
 
         # Decide insert vs update if not explicitly set
@@ -196,7 +205,7 @@ class Model(metaclass=ModelBase):
             # Auto-generate a primary key value if appropriate (single PK, missing value).
             try:
                 if pk_name is not None:
-                    pk_field = self._fields[pk_name]
+                    pk_field = self._neutronapi_fields_[pk_name]
                     if getattr(self, pk_name, None) in (None, ""):
                         from .fields import CharField  # localized import to avoid cycles
                         if isinstance(pk_field, CharField):
@@ -211,7 +220,7 @@ class Model(metaclass=ModelBase):
             # Prepare columns/values for INSERT
             cols = []
             vals = []
-            for fname, field in self._fields.items():
+            for fname, field in self._neutronapi_fields_.items():
                 db_col = getattr(field, 'db_column', None) or fname
                 val = getattr(self, fname, None)
                 if val is None and getattr(field, 'default', None) is not None:
@@ -289,7 +298,7 @@ class Model(metaclass=ModelBase):
         table_ident = f"{self._quote(schema)}.{self._quote(table)}" if is_pg else self._quote(f"{schema}_{table}")
         
         # Get primary key
-        pk_fields = [name for name, f in self._fields.items() if getattr(f, 'primary_key', False)]
+        pk_fields = [name for name, f in self._neutronapi_fields_.items() if getattr(f, 'primary_key', False)]
         if len(pk_fields) != 1:
             raise ValueError("Cannot delete without exactly one primary key field.")
         
@@ -309,7 +318,7 @@ class Model(metaclass=ModelBase):
 
     async def refresh_from_db(self, fields=None, using: Optional[str] = None):
         """Reload field values from the database."""
-        pk_fields = [name for name, f in self._fields.items() if getattr(f, 'primary_key', False)]
+        pk_fields = [name for name, f in self._neutronapi_fields_.items() if getattr(f, 'primary_key', False)]
         if len(pk_fields) != 1:
             raise ValueError("Cannot refresh without exactly one primary key field.")
         
@@ -331,10 +340,10 @@ class Model(metaclass=ModelBase):
         # Update only requested fields or all fields
         if fields:
             for field_name in fields:
-                if field_name in self._fields:
+                if field_name in self._neutronapi_fields_:
                     setattr(self, field_name, getattr(fresh_instance, field_name))
         else:
-            for field_name in self._fields:
+            for field_name in self._neutronapi_fields_:
                 setattr(self, field_name, getattr(fresh_instance, field_name))
 
     def get_absolute_url(self):
@@ -346,7 +355,7 @@ class Model(metaclass=ModelBase):
 
     def __str__(self):
         """Return a human-readable representation of the model."""
-        pk_fields = [name for name, f in self._fields.items() if getattr(f, 'primary_key', False)]
+        pk_fields = [name for name, f in self._neutronapi_fields_.items() if getattr(f, 'primary_key', False)]
         if pk_fields:
             pk_value = getattr(self, pk_fields[0], None)
             return f"{self.__class__.__name__} object ({pk_value})"

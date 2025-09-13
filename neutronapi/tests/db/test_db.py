@@ -82,7 +82,7 @@ class TestModelFunctionality(unittest.TestCase):
     
     def test_model_fields_discovery(self):
         """Test that model fields are properly discovered."""
-        fields = SampleModel._fields
+        fields = SampleModel._neutronapi_fields_
         
         self.assertIn('id', fields)
         self.assertIn('name', fields)

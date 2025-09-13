@@ -440,7 +440,7 @@ class MigrationManager:
                     for name, obj in inspect.getmembers(module):
                         if (
                             inspect.isclass(obj)
-                            and hasattr(obj, "_fields")
+                            and hasattr(obj, "_neutronapi_fields_")
                             and not name.startswith("_")
                             and obj.__module__.startswith(f"{app_label}.")
                         ):
@@ -670,8 +670,8 @@ class Migration{migration_id}(Migration):
             return {"models": model_deps, "enums": enum_deps}
 
         # Process Model fields
-        if hasattr(model, "_fields"):
-            for field in model._fields.values():
+        if hasattr(model, "_neutronapi_fields_"):
+            for field in model._neutronapi_fields_.values():
                 # Check if field is a reference to another model (adjust based on actual FK implementation)
                 # This example assumes a 'related_model' attribute on FK fields
                 related_model = getattr(field, "related_model", None)
@@ -730,8 +730,8 @@ class Migration{migration_id}(Migration):
             deleted_desc = previous_fields_state.get(deleted_field, "")
             for added_field in added_fields:
                 # Get current field description for comparison
-                if added_field in model_class._fields:
-                    added_desc = model_class._fields[added_field].describe()
+                if added_field in model_class._neutronapi_fields_:
+                    added_desc = model_class._neutronapi_fields_[added_field].describe()
                     # If field types match, it's a potential rename
                     if deleted_desc == added_desc:
                         rename_candidates.append((deleted_field, added_field))
@@ -753,7 +753,7 @@ class Migration{migration_id}(Migration):
             
             # Show field types for context
             old_type = previous_fields_state.get(old_field, "unknown")
-            new_type = model_class._fields[new_field].describe() if new_field in model_class._fields else "unknown"
+            new_type = model_class._neutronapi_fields_[new_field].describe() if new_field in model_class._neutronapi_fields_ else "unknown"
             print(f"  Field types:   '{old_type}' -> '{new_type}'")
             
             while True:
@@ -1043,7 +1043,7 @@ class Migration{migration_id}(Migration):
                             meta_dict[key] = getattr(meta_cls, key)
                     search_meta = meta_dict or None
                 operations.append(
-                    CreateModel(model_name=prefixed_name, fields=model_class._fields, search_meta=search_meta)
+                    CreateModel(model_name=prefixed_name, fields=model_class._neutronapi_fields_, search_meta=search_meta)
                 )
             else:
                 print(
@@ -1133,12 +1133,12 @@ class Migration{migration_id}(Migration):
 
             # --- Added Fields ---
             for field_name in current_field_names - previous_field_names:
-                if field_name in model_class._fields:
+                if field_name in model_class._neutronapi_fields_:
                     operations.append(
                         AddField(
                             model_name=prefixed_name,
                             field_name=field_name,
-                            field=model_class._fields[field_name],
+                            field=model_class._neutronapi_fields_[field_name],
                         )
                     )
                 else:
@@ -1157,18 +1157,18 @@ class Migration{migration_id}(Migration):
                 current_field_names & previous_field_names
             ):  # Intersection
                 # Use .describe() for comparison
-                current_desc = model_class._fields[field_name].describe()
+                current_desc = model_class._neutronapi_fields_[field_name].describe()
                 previous_desc = previous_fields_state.get(
                     field_name
                 )  # Already a string from describe()
 
                 if current_desc != previous_desc:
-                    if field_name in model_class._fields:
+                    if field_name in model_class._neutronapi_fields_:
                         operations.append(
                             AlterField(
                                 model_name=prefixed_name,
                                 field_name=field_name,
-                                field=model_class._fields[field_name],
+                                field=model_class._neutronapi_fields_[field_name],
                             )
                         )
                     else:
@@ -1572,7 +1572,7 @@ class Migration{migration_id}(Migration):
                 current_state[model_class.__name__] = {
                     "fields": {
                         name: field.describe()
-                        for name, field in model_class._fields.items()
+                        for name, field in model_class._neutronapi_fields_.items()
                     }
                 }
             else:

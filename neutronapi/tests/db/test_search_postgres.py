@@ -43,7 +43,7 @@ class TestSearchPostgres(unittest.IsolatedAsyncioTestCase):
         from neutronapi.db.migrations import CreateModel
         conn = await get_databases().get_connection('default')
         # Ensure table name matches Model.get_table_name() -> neutronapi_test_doc
-        op = CreateModel('neutronapi.TestDoc', self.TestDoc._fields)
+        op = CreateModel('neutronapi.TestDoc', self.TestDoc._neutronapi_fields_)
         await op.database_forwards(
             app_label='neutronapi',
             provider=conn.provider,

@@ -39,7 +39,7 @@ class TestModelSaveSemantics(unittest.IsolatedAsyncioTestCase):
 
         # Create backing table with unique constraint on email
         app_label, table_base = UniqueEmailModel._get_parsed_table_name()
-        await self.provider.create_table(app_label, table_base, list(UniqueEmailModel._fields.items()))
+        await self.provider.create_table(app_label, table_base, list(UniqueEmailModel._neutronapi_fields_.items()))
 
     async def asyncTearDown(self):
         try:

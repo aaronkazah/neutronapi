@@ -57,7 +57,7 @@ class TestQuerySetMoreSQLite(unittest.IsolatedAsyncioTestCase):
         connection = await self.db_manager.get_connection()
         
         # Create table for TestObject model using migrations
-        create_operation = CreateModel('neutronapi.TestObject', TestObject._fields)
+        create_operation = CreateModel('neutronapi.TestObject', TestObject._neutronapi_fields_)
         await create_operation.database_forwards(
             app_label='neutronapi',
             provider=connection.provider, 

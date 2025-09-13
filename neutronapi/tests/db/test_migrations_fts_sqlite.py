@@ -45,7 +45,7 @@ class TestMigrationsFTSSQLite(unittest.IsolatedAsyncioTestCase):
             'sqlite_fts': getattr(Post.Meta, 'sqlite_fts', True),
         }
 
-        op = CreateModel('neutronapi.Post', Post._fields, search_meta=search_meta)
+        op = CreateModel('neutronapi.Post', Post._neutronapi_fields_, search_meta=search_meta)
         await op.database_forwards('neutronapi', conn.provider, None, None, conn)
 
         base_table = Post.get_table_name()
