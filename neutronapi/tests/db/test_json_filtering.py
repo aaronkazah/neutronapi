@@ -1,0 +1,197 @@
+"""
+Test cases for JSON field filtering with key lookups.
+
+This tests the ORM's ability to filter JSON fields using key-based lookups
+like _fields__account='value'. PostgreSQL supports this natively, SQLite should too.
+"""
+
+import unittest
+from neutronapi.db.models import Model
+from neutronapi.db.fields import CharField, JSONField, IntegerField
+from neutronapi.db.connection import setup_databases, get_databases
+from neutronapi.db.migrations import CreateModel
+
+
+class JsonTestModel(Model):
+    """Test model with JSON field for filtering tests."""
+
+    name = CharField(max_length=100)
+    data = JSONField(default=dict)
+    count = IntegerField(default=0)
+
+
+class TestJSONFiltering(unittest.IsolatedAsyncioTestCase):
+    """Test JSON field filtering with key-based lookups."""
+
+    async def asyncSetUp(self):
+        """Set up test database and table."""
+        # Will be overridden by test runner to use SQLite or PostgreSQL
+        setup_databases({
+            'default': {
+                'ENGINE': 'aiosqlite',
+                'NAME': ':memory:',
+            }
+        })
+
+        self.connection = await get_databases().get_connection('default')
+
+        # Create table
+        op = CreateModel('neutronapi.JsonTestModel', JsonTestModel._neutronapi_fields_)
+        await op.database_forwards('neutronapi', self.connection.provider, None, None, self.connection)
+
+        # Create test data with varied JSON structures
+        await JsonTestModel.objects.create(
+            name='user1',
+            data={'account': 'test_account', 'role': 'admin', 'active': True},
+            count=1
+        )
+        await JsonTestModel.objects.create(
+            name='user2',
+            data={'account': 'other_account', 'role': 'user', 'active': False},
+            count=2
+        )
+        await JsonTestModel.objects.create(
+            name='user3',
+            data={'role': 'guest', 'active': True},  # No account key
+            count=3
+        )
+        await JsonTestModel.objects.create(
+            name='user4',
+            data={'account': 'test_account', 'role': 'user', 'department': 'engineering'},
+            count=4
+        )
+
+    async def test_json_key_filtering_exact(self):
+        """Test filtering JSON field by key with exact value."""
+        # Filter by account key
+        results = await JsonTestModel.objects.filter(data__account='test_account')
+        results_list = list(results)
+
+        self.assertEqual(len(results_list), 2)
+        names = {r.name for r in results_list}
+        self.assertEqual(names, {'user1', 'user4'})
+
+    async def test_json_key_filtering_different_values(self):
+        """Test filtering JSON field by key with different values."""
+        # Filter by different account value
+        results = await JsonTestModel.objects.filter(data__account='other_account')
+        results_list = list(results)
+
+        self.assertEqual(len(results_list), 1)
+        self.assertEqual(results_list[0].name, 'user2')
+
+    async def test_json_key_filtering_nonexistent_key(self):
+        """Test filtering by key that doesn't exist in all records."""
+        # Filter by department key (only exists in user4)
+        results = await JsonTestModel.objects.filter(data__department='engineering')
+        results_list = list(results)
+
+        self.assertEqual(len(results_list), 1)
+        self.assertEqual(results_list[0].name, 'user4')
+
+    async def test_json_key_filtering_boolean(self):
+        """Test filtering JSON field by boolean value."""
+        # Filter by active boolean
+        results = await JsonTestModel.objects.filter(data__active=True)
+        results_list = list(results)
+
+        self.assertEqual(len(results_list), 2)
+        names = {r.name for r in results_list}
+        self.assertEqual(names, {'user1', 'user3'})
+
+    async def test_json_key_filtering_nonexistent_value(self):
+        """Test filtering by value that doesn't exist."""
+        results = await JsonTestModel.objects.filter(data__account='nonexistent')
+        results_list = list(results)
+
+        self.assertEqual(len(results_list), 0)
+
+    async def test_multiple_json_key_filters(self):
+        """Test filtering by multiple JSON keys."""
+        # Filter by account AND role
+        results = await JsonTestModel.objects.filter(
+            data__account='test_account',
+            data__role='admin'
+        )
+        results_list = list(results)
+
+        self.assertEqual(len(results_list), 1)
+        self.assertEqual(results_list[0].name, 'user1')
+
+    async def test_json_key_with_other_field_filters(self):
+        """Test combining JSON key filters with regular field filters."""
+        # Filter by JSON key AND regular field
+        results = await JsonTestModel.objects.filter(
+            data__account='test_account',
+            count__gt=3
+        )
+        results_list = list(results)
+
+        self.assertEqual(len(results_list), 1)
+        self.assertEqual(results_list[0].name, 'user4')
+
+    async def test_json_exact_vs_key_filtering(self):
+        """Test difference between exact JSON matching and key filtering."""
+        # Exact JSON matching - must match entire object
+        results_exact = await JsonTestModel.objects.filter(
+            data={'account': 'test_account', 'role': 'admin', 'active': True}
+        )
+        exact_list = list(results_exact)
+        self.assertEqual(len(exact_list), 1)
+        self.assertEqual(exact_list[0].name, 'user1')
+
+        # Key filtering - matches any object with that key-value pair
+        results_key = await JsonTestModel.objects.filter(data__account='test_account')
+        key_list = list(results_key)
+        self.assertEqual(len(key_list), 2)
+        names = {r.name for r in key_list}
+        self.assertEqual(names, {'user1', 'user4'})
+
+
+class TestJSONFilteringPostgreSQL(TestJSONFiltering):
+    """Test JSON filtering with PostgreSQL provider."""
+
+    async def asyncSetUp(self):
+        """Set up PostgreSQL test database."""
+        setup_databases({
+            'default': {
+                'ENGINE': 'asyncpg',
+                'NAME': 'test_db',
+                'USER': 'test_user',
+                'PASSWORD': 'test_pass',
+                'HOST': 'localhost',
+                'PORT': 5432,
+            }
+        })
+
+        self.connection = await get_databases().get_connection('default')
+
+        # Create table
+        op = CreateModel('neutronapi.JsonTestModel', JsonTestModel._neutronapi_fields_)
+        await op.database_forwards('neutronapi', self.connection.provider, None, None, self.connection)
+
+        # Create test data
+        await JsonTestModel.objects.create(
+            name='user1',
+            data={'account': 'test_account', 'role': 'admin', 'active': True},
+            count=1
+        )
+        await JsonTestModel.objects.create(
+            name='user2',
+            data={'account': 'other_account', 'role': 'user', 'active': False},
+            count=2
+        )
+        await JsonTestModel.objects.create(
+            name='user3',
+            data={'role': 'guest', 'active': True},  # No account key
+            count=3
+        )
+        await JsonTestModel.objects.create(
+            name='user4',
+            data={'account': 'test_account', 'role': 'user', 'department': 'engineering'},
+            count=4
+        )
+
+
+if __name__ == '__main__':
+    unittest.main()

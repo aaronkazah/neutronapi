@@ -167,20 +167,59 @@ class TestFieldsAsFieldName(unittest.IsolatedAsyncioTestCase):
         # Verify internal metadata uses _neutronapi_fields_
         self.assertTrue(hasattr(ModelWithFieldsField, '_neutronapi_fields_'))
         self.assertIsInstance(ModelWithFieldsField._neutronapi_fields_, dict)
-        
+
         # Verify _fields is treated as a user field in the metadata
         self.assertIn('_fields', ModelWithFieldsField._neutronapi_fields_)
-        
+
         # Create instance and verify it doesn't interfere with internal metadata
         instance = ModelWithFieldsField(
             name='Metadata Test',
             _fields={'this': 'should not interfere', 'with': 'internal metadata'}
         )
-        
+
         # Verify instance still has access to model metadata through internal attribute
         self.assertIn('name', instance._neutronapi_fields_)
         self.assertIn('_fields', instance._neutronapi_fields_)
         self.assertIn('count', instance._neutronapi_fields_)
+
+    async def test_json_field_key_filtering_fails(self):
+        """Test that JSON field key filtering (_fields__account) fails as expected."""
+        # Create test data with JSON field containing 'account' key
+        await ModelWithFieldsField.objects.create(
+            name='user_with_account',
+            _fields={'account': 'test_account', 'role': 'admin'},
+            count=1
+        )
+        await ModelWithFieldsField.objects.create(
+            name='user_without_account',
+            _fields={'role': 'user'},
+            count=2
+        )
+
+        # Test that direct JSON key filtering fails
+        # This demonstrates why we need manual filtering fallback
+        with self.assertRaises(Exception) as context:
+            await ModelWithFieldsField.objects.filter(_fields__account='test_account')
+
+        # Should get "Unsupported lookup type: account"
+        self.assertIn("Unsupported lookup type", str(context.exception))
+
+        # Demonstrate that exact JSON matching works
+        results = await ModelWithFieldsField.objects.filter(
+            _fields={'account': 'test_account', 'role': 'admin'}
+        )
+        results_list = list(results)
+        self.assertEqual(len(results_list), 1)
+        self.assertEqual(results_list[0].name, 'user_with_account')
+
+        # Show manual filtering works (what our fallback does)
+        all_records = await ModelWithFieldsField.objects.all()
+        matching_records = [
+            record for record in all_records
+            if isinstance(record._fields, dict) and record._fields.get('account') == 'test_account'
+        ]
+        self.assertEqual(len(matching_records), 1)
+        self.assertEqual(matching_records[0].name, 'user_with_account')
 
 
 if __name__ == '__main__':

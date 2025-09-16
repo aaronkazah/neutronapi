@@ -1,4 +1,5 @@
 import datetime
+import json
 try:
     import numpy as np  # optional
 except Exception:  # pragma: no cover
@@ -96,7 +97,7 @@ class QuerySet(Generic[T]):
         
         # Derive JSON fields from the model
         derived_json = set()
-        if hasattr(model_cls, '_fields'):
+        if hasattr(model_cls, '_neutronapi_fields_'):
             try:
                 from .fields import JSONField
                 for fname, f in model_cls._neutronapi_fields_.items():
@@ -639,12 +640,16 @@ class QuerySet(Generic[T]):
                     if self._is_sqlite and lookup_type == 'icontains':
                         lookup_type = 'contains'  # Will be handled by LOWER() later
 
-                    if lookup_type not in lookup_map and field_name not in self._json_fields:
-                        raise ValueError(f"Unsupported lookup type: {lookup_type}")
-
                     if field_name in self._json_fields:
-                        json_path = lookup_parts[1:-1] if lookup_type in lookup_map else lookup_parts[1:]
-                        json_filter = {'field': field_name, 'path': json_path, 'lookup': lookup_type, 'value': value}
+                        if lookup_type in lookup_map:
+                            # Standard lookup like data__account__exact='value'
+                            json_path = lookup_parts[1:-1]  # ['account']
+                            actual_lookup = lookup_type
+                        else:
+                            # JSON key lookup like data__account='value' (defaults to exact)
+                            json_path = lookup_parts[1:]  # ['account']
+                            actual_lookup = 'exact'
+                        json_filter = {'field': field_name, 'path': json_path, 'lookup': actual_lookup, 'value': value}
 
                         condition, json_params = self._build_json_condition(json_filter, param_counter)
                         if condition:
@@ -660,6 +665,10 @@ class QuerySet(Generic[T]):
                             params.extend(s_params)
                             param_counter += len(s_params)
                     else:
+                        # Check if lookup_type is supported for non-JSON fields
+                        if lookup_type not in lookup_map:
+                            raise ValueError(f"Unsupported lookup type: {lookup_type}")
+
                         if lookup_type == 'in':
                             if not hasattr(value, '__iter__') or isinstance(value, str):
                                 raise ValueError(f"Value for 'in' lookup must be an iterable. Got {type(value)}")
@@ -769,8 +778,18 @@ class QuerySet(Generic[T]):
             else:
                 op_map = {'gt': '>', 'gte': '>=', 'lt': '<', 'lte': '<='}
                 if lookup == 'exact':
-                    condition = f"CAST({json_expr} AS TEXT) = {placeholder}"
-                    params.append(str(value))
+                    # Special handling for boolean values
+                    if isinstance(value, bool):
+                        bool_text = json.dumps(value)
+                        condition = f"(CAST({json_expr} AS TEXT) = {placeholder} OR CAST({json_expr} AS TEXT) = ?)"
+                        params.extend([bool_text, "1" if value else "0"])
+                    elif isinstance(value, (dict, list)):
+                        serialized = json.dumps(value, separators=(',', ':'))
+                        condition = f"CAST({json_expr} AS TEXT) = {placeholder}"
+                        params.append(serialized)
+                    else:
+                        condition = f"CAST({json_expr} AS TEXT) = {placeholder}"
+                        params.append(str(value))
                 elif lookup == 'contains':
                     condition = f"CAST({json_expr} AS TEXT) LIKE {placeholder}"
                     params.append(f"%{value}%")
@@ -802,9 +821,25 @@ class QuerySet(Generic[T]):
             if lookup == 'isnull':
                 condition = f"{path_expr} IS {'NULL' if value else 'NOT NULL'}"
             elif lookup == 'exact':
-                # Force parameter to text to avoid JSON type inference issues
-                condition = f"{text_path_expr} = {placeholder}::text"
-                params.append(str(value))
+                if not path:
+                    # Compare whole JSON object via jsonb for structural equality
+                    if isinstance(value, (dict, list)):
+                        serialized = json.dumps(value, separators=(',', ':'))
+                    elif isinstance(value, bool):
+                        serialized = json.dumps(value)
+                    else:
+                        serialized = str(value)
+                    condition = f"{path_expr} = {placeholder}::jsonb"
+                    params.append(serialized)
+                else:
+                    if isinstance(value, bool):
+                        serialized = json.dumps(value)
+                    elif isinstance(value, (dict, list)):
+                        serialized = json.dumps(value, separators=(',', ':'))
+                    else:
+                        serialized = str(value)
+                    condition = f"{text_path_expr} = {placeholder}::text"
+                    params.append(serialized)
             elif lookup == 'contains':
                 condition = f"{text_path_expr} LIKE {placeholder}::text"
                 params.append(f"%{value}%")
