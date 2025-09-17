@@ -182,8 +182,8 @@ class TestFieldsAsFieldName(unittest.IsolatedAsyncioTestCase):
         self.assertIn('_fields', instance._neutronapi_fields_)
         self.assertIn('count', instance._neutronapi_fields_)
 
-    async def test_json_field_key_filtering_fails(self):
-        """Test that JSON field key filtering (_fields__account) fails as expected."""
+    async def test_json_field_key_filtering_works(self):
+        """Test that JSON field key filtering (_fields__account) works correctly."""
         # Create test data with JSON field containing 'account' key
         await ModelWithFieldsField.objects.create(
             name='user_with_account',
@@ -196,13 +196,15 @@ class TestFieldsAsFieldName(unittest.IsolatedAsyncioTestCase):
             count=2
         )
 
-        # Test that direct JSON key filtering fails
-        # This demonstrates why we need manual filtering fallback
-        with self.assertRaises(Exception) as context:
-            await ModelWithFieldsField.objects.filter(_fields__account='test_account')
+        # Test that direct JSON key filtering now works
+        # This functionality has been implemented
+        results = await ModelWithFieldsField.objects.filter(_fields__account='test_account')
+        results_list = list(results)
 
-        # Should get "Unsupported lookup type: account"
-        self.assertIn("Unsupported lookup type", str(context.exception))
+        # Should find instances with _fields.account='test_account'
+        self.assertEqual(len(results_list), 1)  # Only user_with_account has this account
+        names = {r.name for r in results_list}
+        self.assertEqual(names, {'user_with_account'})
 
         # Demonstrate that exact JSON matching works
         results = await ModelWithFieldsField.objects.filter(

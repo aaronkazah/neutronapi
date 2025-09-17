@@ -176,11 +176,36 @@ class QuerySet(Generic[T]):
         qs = self._clone()
         qs._order_by = []
         for field in fields:
-            if field.startswith('-'):
-                qs._order_by.append(f"{field[1:]} DESC")
-            else:
-                qs._order_by.append(f"{field} ASC")
+            desc = field.startswith('-')
+            field_name = field[1:] if desc else field
+
+            # Store the field path and direction for later processing
+            # JSON field detection will be done at query build time when provider is available
+            qs._order_by.append({
+                'field': field_name,
+                'direction': 'DESC' if desc else 'ASC'
+            })
         return qs
+
+    def _is_json_field_lookup(self, field_path: str) -> bool:
+        """Check if a field path is a JSON field lookup."""
+        parts = field_path.split('__')
+        field_name = parts[0]
+        return field_name in self._json_fields and len(parts) > 1
+
+    def _build_json_order_expression(self, field_path: str) -> str:
+        """Build JSON extraction expression for ordering."""
+        parts = field_path.split('__')
+        field_name = parts[0]
+        json_path = parts[1:]
+
+        if self._is_sqlite:
+            json_path_str = f"$.{'.'.join(json_path)}"
+            return f"json_extract({field_name}, '{json_path_str}')"
+        else:
+            # PostgreSQL JSON path
+            json_path_str = '{' + ','.join(json_path) + '}'
+            return f"{field_name}#>>'{json_path_str}'"
 
     def order_by_rank(self) -> 'QuerySet':
         """Order results by search rank when a search filter is present.
@@ -899,7 +924,26 @@ class QuerySet(Generic[T]):
         if rank_order_clause:
             order_clauses.append(rank_order_clause)
         if self._order_by:
-            order_clauses.append(', '.join(self._order_by))
+            order_parts = []
+            for order_item in self._order_by:
+                if isinstance(order_item, dict):
+                    # New format with field/direction
+                    field_name = order_item['field']
+                    direction = order_item['direction']
+
+                    # Check if this is a JSON field lookup
+                    if '__' in field_name and self._is_json_field_lookup(field_name):
+                        json_expr = self._build_json_order_expression(field_name)
+                        order_parts.append(f"{json_expr} {direction}")
+                    else:
+                        # Regular field ordering
+                        order_parts.append(f"{field_name} {direction}")
+                else:
+                    # Legacy string format (for backward compatibility)
+                    order_parts.append(order_item)
+
+            if order_parts:
+                order_clauses.append(', '.join(order_parts))
         if order_clauses:
             sql += f" ORDER BY {', '.join(order_clauses)}"
             params.extend(rank_params)

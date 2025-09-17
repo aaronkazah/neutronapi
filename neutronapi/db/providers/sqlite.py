@@ -479,12 +479,14 @@ class SQLiteProvider(BaseProvider):
         if meta_fts is not None:
             fts_cfg = meta_fts
         fts_table = None
+        # Strip quotes from table name for FTS table construction
+        table_name = table.strip('"')
         if isinstance(fts_cfg, dict):
             # If dict provided, honor explicit name or default to <table>_fts
-            fts_table = fts_cfg.get('table') or f"{table}_fts"
+            fts_table = fts_cfg.get('table') or f"{table_name}_fts"
         elif fts_cfg:
             # Any truthy non-dict also enables default
-            fts_table = f"{table}_fts"
+            fts_table = f"{table_name}_fts"
 
         if fts_table:
             # Build MATCH query; if specific fields provided, constrain via column qualifiers.
@@ -494,7 +496,7 @@ class SQLiteProvider(BaseProvider):
             else:
                 match_expr = query
             placeholder = self.get_placeholder(param_start)
-            condition = f"rowid IN (SELECT rowid FROM {fts_table} WHERE {fts_table} MATCH {placeholder})"
+            condition = f"rowid IN (SELECT rowid FROM \"{fts_table}\" WHERE \"{fts_table}\" MATCH {placeholder})"
             return condition, [match_expr]
 
         # Fallback: LIKE across text fields (case-insensitive)
@@ -548,10 +550,12 @@ class SQLiteProvider(BaseProvider):
         if meta_fts is not None:
             fts_cfg = meta_fts
         fts_table = None
+        # Strip quotes from table name for FTS table construction
+        table_name = table.strip('"')
         if isinstance(fts_cfg, dict):
-            fts_table = fts_cfg.get('table') or f"{table}_fts"
+            fts_table = fts_cfg.get('table') or f"{table_name}_fts"
         elif fts_cfg:
-            fts_table = f"{table}_fts"
+            fts_table = f"{table_name}_fts"
         if not fts_table:
             return "", []
 
@@ -563,8 +567,8 @@ class SQLiteProvider(BaseProvider):
         placeholder = self.get_placeholder(param_start)
         # Correlated subselect computes bm25 for matching rowid; ASC => best score first
         order_clause = (
-            f"(SELECT bm25({fts_table}) FROM {fts_table} "
-            f"WHERE {fts_table}.rowid = {table}.rowid AND {fts_table} MATCH {placeholder}) ASC"
+            f"(SELECT bm25(\"{fts_table}\") FROM \"{fts_table}\" "
+            f"WHERE \"{fts_table}\".rowid = \"{table}\".rowid AND \"{fts_table}\" MATCH {placeholder}) ASC"
         )
         return order_clause, [match_expr]
 
