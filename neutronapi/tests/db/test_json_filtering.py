@@ -237,25 +237,25 @@ class TestJSONFilteringPostgreSQL(TestJSONFiltering):
         op = CreateModel('neutronapi.JsonTestModel', JsonTestModel._neutronapi_fields_)
         await op.database_forwards('neutronapi', self.connection.provider, None, None, self.connection)
 
-        # Create test data
+        # Create test data with varied JSON structures
         await JsonTestModel.objects.create(
             name='user1',
-            data={'account': 'test_account', 'role': 'admin', 'active': True},
+            data={'account': 'test_account', 'role': 'admin', 'active': True, 'count': 3},
             count=1
         )
         await JsonTestModel.objects.create(
             name='user2',
-            data={'account': 'other_account', 'role': 'user', 'active': False},
+            data={'account': 'other_account', 'role': 'user', 'active': False, 'count': 1},
             count=2
         )
         await JsonTestModel.objects.create(
             name='user3',
-            data={'role': 'guest', 'active': True},  # No account key
+            data={'role': 'guest', 'active': True, 'count': 2},  # No account key
             count=3
         )
         await JsonTestModel.objects.create(
             name='user4',
-            data={'account': 'test_account', 'role': 'user', 'department': 'engineering'},
+            data={'account': 'test_account', 'role': 'user', 'department': 'engineering', 'count': 4},
             count=4
         )
 
