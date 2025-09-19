@@ -20,3 +20,9 @@ def get_sqlite_test_config():
         'ENGINE': 'aiosqlite',
         'NAME': ':memory:',
     }
+
+
+async def cleanup_postgres_table(connection, model_class):
+    """Helper to clean up PostgreSQL tables after tests."""
+    table_name = model_class.get_table_name()
+    await connection.provider.execute(f"DROP TABLE IF EXISTS {table_name}")

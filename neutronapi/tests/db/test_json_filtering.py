@@ -259,6 +259,12 @@ class TestJSONFilteringPostgreSQL(TestJSONFiltering):
             count=4
         )
 
+    async def asyncTearDown(self):
+        """Clean up PostgreSQL test database."""
+        from neutronapi.tests.test_utils import cleanup_postgres_table
+        await cleanup_postgres_table(self.connection, JsonTestModel)
+        await self.connection.close()
+
 
 if __name__ == '__main__':
     unittest.main()
