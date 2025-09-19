@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neutronapi"
-version = "0.4.3"
+version = "0.4.4"
 description = "A modern, high-performance ASGI-based Python web framework."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 license = "MIT"
 authors = [
   {name = "Aaron Kazah", email = "aaron@neutronapi.com"}
@@ -18,9 +18,6 @@ classifiers = [
   "Intended Audience :: Developers",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
   "Topic :: Software Development :: Libraries :: Python Modules",

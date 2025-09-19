@@ -317,10 +317,7 @@ class Background:
                     self.logger.info(due_msg)
 
                     for task in due_tasks:
-                        task_msg = f"Executing task: {
-                            task.name}, last_run: {
-                            task.last_run}, frequency: {
-                            task.frequency}"
+                        task_msg = f"Executing task: {task.name}, last_run: {task.last_run}, frequency: {task.frequency}"
                         self.logger.info(task_msg)
 
                     # Sort by priority
