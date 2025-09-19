@@ -98,9 +98,9 @@ jobs:
         python manage.py test
       env:
         DATABASE_PROVIDER: asyncpg
-        PGHOST: localhost
-        PGPORT: 5432
-        PGUSER: postgres
-        PGPASSWORD: postgres
-        PGDATABASE: postgres
+        POSTGRES_HOST: localhost
+        POSTGRES_PORT: 5432
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: postgres
+        POSTGRES_DB: postgres
 
