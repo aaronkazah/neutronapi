@@ -11,7 +11,7 @@ RegistryValue = TypeVar('RegistryValue')
 
 from neutronapi.base import API, Response
 from neutronapi.api import exceptions
-from neutronapi.middleware.cors import CORS
+from neutronapi.middleware.cors import CorsMiddleware
 from neutronapi.middleware.routing import RoutingMiddleware
 from neutronapi.middleware.allowed_hosts import AllowedHostsMiddleware
 
@@ -209,7 +209,7 @@ class Application:
             # Legacy minimal wrapping
             hosts_app = AllowedHostsMiddleware(base_router,
                                                allowed_hosts=allowed_hosts) if allowed_hosts else base_router
-            self.app = CORS(hosts_app, allow_all_origins=cors_allow_all)
+            self.app = CorsMiddleware(hosts_app, allow_all_origins=cors_allow_all)
 
         # lifecycle hooks
         self.app.on_startup = []
