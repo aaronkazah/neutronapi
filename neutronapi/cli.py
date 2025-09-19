@@ -159,21 +159,26 @@ def main() -> None:
             sys.exit(1)
 
     async def _dispatch():
+        databases = None
         try:
+            # Initialize database connections automatically
+            from neutronapi.db import get_databases
+            databases = get_databases()
+
             command = commands[command_name]
             handle = getattr(command, 'handle', None)
             if handle is None:
                 raise RuntimeError("Command has no handle()")
-            if asyncio.iscoroutinefunction(handle):
-                result = await handle(args)
-            else:
-                loop = asyncio.get_running_loop()
-                result = await loop.run_in_executor(None, handle, args)
-            if isinstance(result, int):
-                sys.exit(result)
+
+            # ALWAYS expect async - no fallback!
+            if not asyncio.iscoroutinefunction(handle):
+                raise RuntimeError(f"Command {command_name} handle() must be async")
+
+            result = await handle(args)
+            exit_code = result if isinstance(result, int) else 0
         except KeyboardInterrupt:
             print("\nOperation cancelled by user.")
-            sys.exit(1)
+            exit_code = 1
         except SystemExit:
             raise
         except Exception as e:
@@ -181,7 +186,22 @@ def main() -> None:
             if os.getenv("DEBUG", "False").lower() == "true":
                 import traceback
                 traceback.print_exc()
-            sys.exit(1)
+            exit_code = 1
+        finally:
+            # Clean up database connections automatically (same pattern as test command)
+            try:
+                from neutronapi.db import shutdown_all_connections
+                await asyncio.wait_for(shutdown_all_connections(), timeout=5)
+            except asyncio.TimeoutError:
+                print("Warning: Database shutdown timed out, forcing shutdown.")
+            except ImportError:
+                # No database connections to shut down
+                pass
+            except Exception:
+                pass
+
+            # Force exit like test command does (same pattern as test command)
+            os._exit(exit_code)
 
     asyncio.run(_dispatch())
 
