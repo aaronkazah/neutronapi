@@ -263,16 +263,29 @@ class PostgreSQLProvider(BaseProvider):
         await self.execute(f"DROP TABLE IF EXISTS {self._pg_ident(app_label)}.{self._pg_ident(table_base_name)} CASCADE")
 
     async def add_column(self, app_label: str, table_base_name: str, field_name: str, field: Any):
+        # Check if column already exists (for idempotent operations)
+        schema = self._pg_ident(app_label)
+        table = self._pg_ident(table_base_name)
+        column_check_sql = """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = $1 AND table_name = $2 AND column_name = $3
+        """
+        existing_column = await self.fetchone(column_check_sql, (app_label, table_base_name, field_name))
+
+        if existing_column:
+            # Column already exists, skip adding it
+            return
+
         coltype = self.get_column_type(field)
-        sql = f"ALTER TABLE {self._pg_ident(app_label)}.{self._pg_ident(table_base_name)} ADD COLUMN {self._pg_ident(field_name)} {coltype}"
+        sql = f"ALTER TABLE {schema}.{table} ADD COLUMN {self._pg_ident(field_name)} {coltype}"
         default = getattr(field, 'default', None)
         if default is not None:
             sql += f" DEFAULT {self._process_default_value(default)}"
         await self.execute(sql)
         if not getattr(field, 'null', False):
-            await self.execute(f"ALTER TABLE {self._pg_ident(app_label)}.{self._pg_ident(table_base_name)} ALTER COLUMN {self._pg_ident(field_name)} SET NOT NULL")
+            await self.execute(f"ALTER TABLE {schema}.{table} ALTER COLUMN {self._pg_ident(field_name)} SET NOT NULL")
         if getattr(field, 'unique', False):
-            await self.execute(f"ALTER TABLE {self._pg_ident(app_label)}.{self._pg_ident(table_base_name)} ADD CONSTRAINT {self._pg_ident(table_base_name + '_' + field_name + '_key')} UNIQUE ({self._pg_ident(field_name)})")
+            await self.execute(f"ALTER TABLE {schema}.{table} ADD CONSTRAINT {self._pg_ident(table_base_name + '_' + field_name + '_key')} UNIQUE ({self._pg_ident(field_name)})")
 
     async def alter_column(self, app_label: str, table_base_name: str, field_name: str, field: Any):
         schema = self._pg_ident(app_label)
