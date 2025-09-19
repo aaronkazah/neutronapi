@@ -226,14 +226,15 @@ class TestJSONFilteringPostgreSQL(TestJSONFiltering):
 
     async def asyncSetUp(self):
         """Set up PostgreSQL test database."""
+        import os
         setup_databases({
             'default': {
                 'ENGINE': 'asyncpg',
-                'NAME': 'test_db',
-                'USER': 'test_user',
-                'PASSWORD': 'test_pass',
-                'HOST': 'localhost',
-                'PORT': 5432,
+                'NAME': os.getenv('PGDATABASE', 'test_db'),
+                'USER': os.getenv('PGUSER', 'postgres'),
+                'PASSWORD': os.getenv('PGPASSWORD', 'postgres'),
+                'HOST': os.getenv('PGHOST', 'localhost'),
+                'PORT': int(os.getenv('PGPORT', '5432')),
             }
         })
 
