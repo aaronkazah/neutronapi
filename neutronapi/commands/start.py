@@ -117,20 +117,64 @@ class Command:
             }
             print(f"Starting production server with {workers} workers...")
         else:
-            # Development defaults
+            # Development defaults with comprehensive reload detection
+            import os
+
+            # Auto-detect reload directories
+            reload_dirs = ["."]  # Always watch current directory
+
+            # Common project structure directories to watch
+            possible_dirs = ["apps", "src", "lib", "core", "api", "backend", "frontend"]
+            for dir_name in possible_dirs:
+                if os.path.isdir(dir_name):
+                    reload_dirs.append(dir_name)
+
+            # If entry point specifies a specific directory, include it
+            try:
+                from neutronapi.conf import settings
+                entry_point = getattr(settings, 'ENTRY', 'apps.entry:app')
+                if ':' in entry_point:
+                    module_path = entry_point.split(':', 1)[0]
+                    # Extract top-level directory from module path
+                    if '.' in module_path:
+                        top_dir = module_path.split('.')[0]
+                        if top_dir not in reload_dirs and os.path.isdir(top_dir):
+                            reload_dirs.append(top_dir)
+            except Exception:
+                pass  # Fallback to default behavior
+
             defaults = {
                 "host": "127.0.0.1",
                 "port": 8000,
                 "reload": True,
-                "reload_dirs": [".", "apps"],  # Watch current directory (project root) and apps
-                "reload_excludes": ["venv/*", ".venv/*", "env/*", ".env/*", 
-                                   "__pycache__/*", "*.pyc", "*.pyo", "*.pyd",
-                                   ".git/*", ".pytest_cache/*", "*.egg-info/*",
-                                   "dist/*", "build/*", "node_modules/*"],
+                "reload_dirs": reload_dirs,
+                "reload_includes": ["*.py"],  # Explicitly watch Python files
+                "reload_excludes": [
+                    # Virtual environments
+                    "venv/*", ".venv/*", "env/*", ".env/*", "virtualenv/*",
+                    # Python cache and compiled files
+                    "__pycache__/*", "*.pyc", "*.pyo", "*.pyd", ".mypy_cache/*",
+                    # Version control
+                    ".git/*", ".hg/*", ".svn/*",
+                    # Testing and CI
+                    ".pytest_cache/*", ".coverage", ".tox/*", "htmlcov/*",
+                    # Build and distribution
+                    "build/*", "dist/*", "*.egg-info/*",
+                    # Dependencies
+                    "node_modules/*", ".npm/*",
+                    # IDE and editor files
+                    ".vscode/*", ".idea/*", "*.swp", "*.swo", "*~",
+                    # OS files
+                    ".DS_Store", "Thumbs.db",
+                    # Logs
+                    "*.log", "logs/*"
+                ],
                 "access_log": True,
                 "log_level": "info",
             }
             print("Starting development server with auto-reload...")
+            print(f"Watching directories: {', '.join(reload_dirs)}")
+            print("Watching file types: *.py")
 
         # Parse uvicorn-style arguments
         uvicorn_kwargs = defaults.copy()
@@ -183,6 +227,15 @@ class Command:
                     i += 1
                 else:
                     print("Error: --reload-exclude requires a value")
+                    return
+            elif arg == "--reload-include":
+                if i + 1 < len(args):
+                    if "reload_includes" not in uvicorn_kwargs:
+                        uvicorn_kwargs["reload_includes"] = []
+                    uvicorn_kwargs["reload_includes"].append(args[i + 1])
+                    i += 1
+                else:
+                    print("Error: --reload-include requires a value")
                     return
             elif arg == "--workers":
                 if i + 1 < len(args):
@@ -291,6 +344,11 @@ class Command:
         print(f"Starting {mode} server at http://{uvicorn_kwargs['host']}:{uvicorn_kwargs['port']}/")
         if uvicorn_kwargs.get("reload"):
             print("Auto-reload enabled. Quit with CONTROL-C.")
+            # Show reload configuration in debug mode
+            if uvicorn_kwargs.get("log_level") == "debug":
+                print(f"Debug: Reload directories: {uvicorn_kwargs.get('reload_dirs', [])}")
+                print(f"Debug: Reload includes: {uvicorn_kwargs.get('reload_includes', [])}")
+                print(f"Debug: Reload excludes: {uvicorn_kwargs.get('reload_excludes', [])}")
         else:
             print("Quit the server with CONTROL-C.")
 
