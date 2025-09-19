@@ -226,16 +226,9 @@ class TestJSONFilteringPostgreSQL(TestJSONFiltering):
 
     async def asyncSetUp(self):
         """Set up PostgreSQL test database."""
-        import os
+        from neutronapi.tests.test_utils import get_postgres_test_config
         setup_databases({
-            'default': {
-                'ENGINE': 'asyncpg',
-                'NAME': os.getenv('PGDATABASE', 'test_db'),
-                'USER': os.getenv('PGUSER', 'postgres'),
-                'PASSWORD': os.getenv('PGPASSWORD', 'postgres'),
-                'HOST': os.getenv('PGHOST', 'localhost'),
-                'PORT': int(os.getenv('PGPORT', '5432')),
-            }
+            'default': get_postgres_test_config()
         })
 
         self.connection = await get_databases().get_connection('default')
