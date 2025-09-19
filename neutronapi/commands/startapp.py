@@ -21,8 +21,9 @@ class Command:
         self.help = "Create a new app in ./apps"
 
     async def handle(self, args: List[str]) -> None:
-        if not args:
+        if not args or (args and args[0] == "--help"):
             print("Usage: neutronapi startapp <app_name>")
+            print(f"Description: {self.help}")
             return
 
         app_name = args[0]

@@ -27,15 +27,6 @@ python manage.py start               # Dev mode (auto-reload)
 python manage.py test
 ```
 
-## Key Features
-
-✅ **Universal Registry System** - Clean dependency injection with `namespace:name` keys  
-✅ **Comprehensive Type Support** - Full typing with IDE integration  
-✅ **High Performance** - Built on uvicorn/ASGI for maximum speed  
-✅ **Database ORM** - Models, migrations, and async queries  
-✅ **Background Tasks** - Scheduled and async task execution  
-✅ **Developer Experience** - Rich docstrings, validation, and error messages  
-
 ## Getting Started Tutorial
 
 **1. Create Project**
@@ -323,24 +314,25 @@ python manage.py startapp posts     # Create new app
 
 ### Custom Commands
 
-Create custom management commands like Django by adding them to your app's `commands` directory:
+Create custom management commands by adding them to your app's `commands` directory:
 
 ```python
 # apps/blog/commands/greet.py
-from neutronapi.commands.base import BaseCommand
+from typing import List
 
-class Command(BaseCommand):
-    help = "Greet a user"
-    
-    def handle(self, *args, **options):
+class Command:
+    def __init__(self):
+        self.help = "Greet a user"
+
+    async def handle(self, args: List[str]) -> None:
         name = args[0] if args else "World"
-        self.success(f"Hello, {name}!")
-        return 0
+        print(f"Hello, {name}!")
 ```
 
 Run with:
 ```bash
 python manage.py greet Alice    # Hello, Alice!
+python manage.py greet --help   # Shows: Greet a user
 ```
 
 Commands are automatically discovered from any `apps/*/commands/*.py` files that contain a `Command` class.
@@ -534,20 +526,3 @@ async def generate_filtered_docs():
 from neutronapi.openapi.openapi import generate_all_endpoints_openapi
 spec = await generate_all_endpoints_openapi(apis, title="All Endpoints")
 ```
-
-**Why use `hidden=True`?**
-- Mark internal APIs (debugging, health checks, admin endpoints)
-- Keep them accessible but exclude from public documentation
-- Use `include_all=True` to generate complete internal docs
-
-## Why NeutronAPI?
-
-- **🚀 Performance**: Built on ASGI/uvicorn for maximum throughput
-- **🏗️ Architecture**: Clean separation with universal dependency injection  
-- **🔒 Type Safety**: Comprehensive typing with IDE support
-- **📚 Auto Documentation**: OpenAPI 3.0 & Swagger 2.0 generation
-- **🎯 Developer Experience**: Rich error messages, validation, and documentation
-- **📦 Batteries Included**: ORM, migrations, background tasks, middleware
-- **🔧 Production Ready**: Multi-worker support, monitoring, and deployment tools
-
-Perfect for building modern APIs, microservices, and high-performance web applications with automatic documentation.

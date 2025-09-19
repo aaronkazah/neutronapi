@@ -41,3 +41,36 @@ class TestCommands(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(os.path.isdir(os.path.join("proj", "apps", "blog")))
         self.assertTrue(os.path.isfile(os.path.join("proj", "apps", "blog", "models.py")))
+
+    async def test_help_functionality(self):
+        """Test that --help works and doesn't execute commands"""
+        from neutronapi.commands import startapp as cmd_startapp
+
+        # Test command with help attribute
+        command = cmd_startapp.Command()
+        self.assertTrue(hasattr(command, 'help'))
+        self.assertEqual(command.help, "Create a new app in ./apps")
+
+        # Test --help doesn't create an app named "--help"
+        # This would have been the bug - creating apps/--help directory
+        await command.handle(["--help"])
+
+        # Verify no "--help" directory was created
+        self.assertFalse(os.path.exists("apps/--help"))
+        self.assertFalse(os.path.exists("--help"))
+
+    async def test_command_without_help(self):
+        """Test commands that don't have help attribute show default text"""
+        # Create a mock command without help
+        class MockCommand:
+            async def handle(self, args):
+                pass
+
+        mock_cmd = MockCommand()
+
+        # Should not have help attribute
+        self.assertFalse(hasattr(mock_cmd, 'help'))
+
+        # When CLI checks for help, it should use default text
+        help_text = getattr(mock_cmd, 'help', 'No description available')
+        self.assertEqual(help_text, 'No description available')

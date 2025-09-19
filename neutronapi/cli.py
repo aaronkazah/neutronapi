@@ -118,6 +118,28 @@ def main() -> None:
     command_name = sys.argv[1]
     args = sys.argv[2:]
 
+    # Handle --help for any command
+    if "--help" in args or command_name == "--help":
+        if command_name == "--help":
+            print("Available commands:")
+            for cmd in sorted(commands.keys()):
+                command_obj = commands[cmd]
+                help_text = getattr(command_obj, 'help', 'No description available')
+                print(f"  {cmd:<15} {help_text}")
+            print("\nUse 'neutronapi <command> --help' for detailed usage")
+            return
+        elif command_name in commands:
+            # Show help for specific command
+            command_obj = commands[command_name]
+            help_text = getattr(command_obj, 'help', 'No description available')
+            print(f"Usage: neutronapi {command_name}")
+            print(f"Description: {help_text}")
+
+            # Show additional help if command has detailed help
+            if hasattr(command_obj, 'get_help'):
+                print(command_obj.get_help())
+            return
+
     if command_name not in commands:
         print(f"Unknown command: {command_name}")
         print("Available commands:", ", ".join(sorted(commands.keys())))
