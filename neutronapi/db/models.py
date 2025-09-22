@@ -82,6 +82,9 @@ class Model(metaclass=ModelBase):
         })
 
     def __init__(self, **kwargs: Any):
+        # Initialize pk to track database state (empty = new object)
+        self.pk = None
+
         for name, field in self._neutronapi_fields_.items():
             if name in kwargs:
                 value = kwargs[name]
@@ -197,9 +200,8 @@ class Model(metaclass=ModelBase):
 
         # Decide insert vs update if not explicitly set
         if create is None:
-            create = True
-            if pk_name is not None and getattr(self, pk_name, None) not in (None, ""):
-                create = False
+            # Simple logic: if pk is set, it came from DB → UPDATE, else → INSERT
+            create = self.pk is None
 
         if create:
             # Auto-generate a primary key value if appropriate (single PK, missing value).
@@ -245,6 +247,9 @@ class Model(metaclass=ModelBase):
             sql = f"INSERT INTO {table_ident} ({', '.join(cols)}) VALUES ({placeholders})"
             await db.execute(sql, vals if is_pg else tuple(vals))
             await db.commit()
+
+            # After successful INSERT, set pk to indicate this object is now in the database
+            self.pk = getattr(self, pk_name) if pk_name else None
             return
 
         # UPDATE path (create is False)
