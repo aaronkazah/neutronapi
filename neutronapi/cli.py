@@ -179,7 +179,8 @@ def main() -> None:
         except KeyboardInterrupt:
             print("\nOperation cancelled by user.")
             exit_code = 1
-        except SystemExit:
+        except SystemExit as e:
+            exit_code = e.code if e.code is not None else 1
             raise
         except Exception as e:
             print(f"\nAn error occurred while running command '{command_name}': {e}")
