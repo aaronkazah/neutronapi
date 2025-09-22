@@ -23,9 +23,11 @@ from neutronapi.tests.db.test_utils import table_exists, get_columns_dict
 
 class TestMigrationOperations(IsolatedAsyncioTestCase):
     """Test individual migration operations thoroughly."""
-    
+
     def setUp(self):
-        self.app_label = "test_migrations"
+        import uuid
+        unique_id = str(uuid.uuid4())[:8]
+        self.app_label = f"test_migrations_{unique_id}"
 
     async def asyncSetUp(self):
         conn = await get_databases().get_connection('default')
@@ -196,9 +198,11 @@ class TestMigrationOperations(IsolatedAsyncioTestCase):
 
 class TestComplexMigrations(IsolatedAsyncioTestCase):
     """Test complex migration scenarios with multiple operations."""
-    
+
     def setUp(self):
-        self.app_label = "complex_test"
+        import uuid
+        unique_id = str(uuid.uuid4())[:8]
+        self.app_label = f"complex_test_{unique_id}"
 
     async def asyncSetUp(self):
         conn = await get_databases().get_connection('default')

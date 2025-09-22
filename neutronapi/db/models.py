@@ -82,7 +82,7 @@ class Model(metaclass=ModelBase):
         })
 
     def __init__(self, **kwargs: Any):
-        # Initialize pk to track database state (empty = new object)
+        # pk tracks if this came from database - None = fresh object
         self.pk = None
 
         for name, field in self._neutronapi_fields_.items():
@@ -244,12 +244,20 @@ class Model(metaclass=ModelBase):
             else:
                 placeholders = ', '.join(['?'] * len(vals))
 
-            sql = f"INSERT INTO {table_ident} ({', '.join(cols)}) VALUES ({placeholders})"
+            # Handle conflicts: UPSERT instead of failing on duplicate
+            if is_pg:
+                # PostgreSQL: ON CONFLICT DO UPDATE
+                update_cols = [f"{col} = EXCLUDED.{col}" for col in cols if col != self._quote(pk_name)]
+                sql = f"INSERT INTO {table_ident} ({', '.join(cols)}) VALUES ({placeholders}) ON CONFLICT ({self._quote(pk_name)}) DO UPDATE SET {', '.join(update_cols)}"
+            else:
+                # SQLite: ON CONFLICT DO UPDATE (safer than REPLACE)
+                update_cols = [f"{col} = excluded.{col}" for col in cols if col != self._quote(pk_name)]
+                sql = f"INSERT INTO {table_ident} ({', '.join(cols)}) VALUES ({placeholders}) ON CONFLICT({self._quote(pk_name)}) DO UPDATE SET {', '.join(update_cols)}"
             await db.execute(sql, vals if is_pg else tuple(vals))
             await db.commit()
 
-            # After successful INSERT, set pk to indicate this object is now in the database
-            self.pk = getattr(self, pk_name) if pk_name else None
+            # After successful INSERT, set pk to primary key value for future saves
+            self.pk = self.id
             return
 
         # UPDATE path (create is False)

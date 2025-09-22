@@ -32,7 +32,16 @@ def _is_postgres_configured():
             except:
                 return False
         
-        return asyncio.run(check_connection())
+        try:
+            loop = asyncio.get_running_loop()
+            # We're in an async context, create a new event loop
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, check_connection())
+                return future.result()
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run
+            return asyncio.run(check_connection())
     except:
         return False
 

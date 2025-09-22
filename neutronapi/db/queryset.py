@@ -989,7 +989,9 @@ class QuerySet(Generic[T]):
             result_dict.setdefault(field, {})
 
         # Return a Model instance instead of opinionated Object
-        return self.model(**result_dict)
+        instance = self.model(**result_dict)
+        instance.pk = instance.id  # Set pk to indicate this came from database
+        return instance
 
 
 
