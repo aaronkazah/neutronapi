@@ -644,7 +644,7 @@ class QuerySet(Generic[T]):
                         
                         # Process as JSON field
                         json_filter = {'field': field_name, 'path': path, 'lookup': lookup_type, 'value': value}
-                        condition, json_params = self._build_json_condition(json_filter, param_counter, negated=q_obj.negated)
+                        condition, json_params = self._build_json_condition(json_filter, param_counter)
                         if condition:
                             parts.append(condition)
                             params.extend(json_params)
@@ -676,7 +676,7 @@ class QuerySet(Generic[T]):
                             actual_lookup = 'exact'
                         json_filter = {'field': field_name, 'path': json_path, 'lookup': actual_lookup, 'value': value}
 
-                        condition, json_params = self._build_json_condition(json_filter, param_counter, negated=q_obj.negated)
+                        condition, json_params = self._build_json_condition(json_filter, param_counter)
                         if condition:
                             parts.append(condition)
                             params.extend(json_params)
@@ -785,7 +785,7 @@ class QuerySet(Generic[T]):
 
         return condition_str, params
 
-    def _build_json_condition(self, filter_item: dict, param_start: int, negated: bool = False) -> tuple:
+    def _build_json_condition(self, filter_item: dict, param_start: int) -> tuple:
         field, path, lookup, value = filter_item['field'], filter_item['path'], filter_item['lookup'], filter_item[
             'value']
 
@@ -808,49 +808,36 @@ class QuerySet(Generic[T]):
                         bool_text = json.dumps(value)
                         base_condition = f"(CAST({json_expr} AS TEXT) = {placeholder} OR CAST({json_expr} AS TEXT) = ?)"
                         params.extend([bool_text, "1" if value else "0"])
-                        if negated:
-                            # For exclude: include records where key doesn't exist OR doesn't match value
-                            condition = f"({json_expr} IS NULL OR NOT {base_condition})"
-                        else:
-                            condition = base_condition
+                        # Make condition NULL-aware to work correctly with exclude (NOT)
+                        condition = f"({json_expr} IS NOT NULL AND {base_condition})"
                     elif isinstance(value, (dict, list)):
                         serialized = json.dumps(value, separators=(',', ':'))
                         base_condition = f"CAST({json_expr} AS TEXT) = {placeholder}"
                         params.append(serialized)
-                        if negated:
-                            condition = f"({json_expr} IS NULL OR NOT {base_condition})"
-                        else:
-                            condition = base_condition
+                        # Make condition NULL-aware to work correctly with exclude (NOT)
+                        condition = f"({json_expr} IS NOT NULL AND {base_condition})"
                     else:
                         base_condition = f"CAST({json_expr} AS TEXT) = {placeholder}"
                         params.append(str(value))
-                        if negated:
-                            condition = f"({json_expr} IS NULL OR NOT {base_condition})"
-                        else:
-                            condition = base_condition
+                        # Make condition NULL-aware to work correctly with exclude (NOT)
+                        condition = f"({json_expr} IS NOT NULL AND {base_condition})"
                 elif lookup == 'contains':
                     base_condition = f"CAST({json_expr} AS TEXT) LIKE {placeholder}"
                     params.append(f"%{value}%")
-                    if negated:
-                        condition = f"({json_expr} IS NULL OR NOT {base_condition})"
-                    else:
-                        condition = base_condition
+                    # Make condition NULL-aware to work correctly with exclude (NOT)
+                    condition = f"({json_expr} IS NOT NULL AND {base_condition})"
                 elif lookup == 'icontains':
                     base_condition = f"LOWER(CAST({json_expr} AS TEXT)) LIKE LOWER({placeholder})"
                     params.append(f"%{value}%")
-                    if negated:
-                        condition = f"({json_expr} IS NULL OR NOT {base_condition})"
-                    else:
-                        condition = base_condition
+                    # Make condition NULL-aware to work correctly with exclude (NOT)
+                    condition = f"({json_expr} IS NOT NULL AND {base_condition})"
                 elif lookup in op_map:
                     op = op_map[lookup]
                     cast_type = "NUMERIC" if isinstance(value, (int, float)) else "TEXT"
                     base_condition = f"CAST({json_expr} AS {cast_type}) {op} {placeholder}"
                     params.append(str(value) if isinstance(value, (int, float)) else value)
-                    if negated:
-                        condition = f"({json_expr} IS NULL OR NOT {base_condition})"
-                    else:
-                        condition = base_condition
+                    # Make condition NULL-aware to work correctly with exclude (NOT)
+                    condition = f"({json_expr} IS NOT NULL AND {base_condition})"
         else:  # PostgreSQL JSONB
             if path:
                 # Build proper PostgreSQL JSON path with literal keys
@@ -879,12 +866,10 @@ class QuerySet(Generic[T]):
                         serialized = json.dumps(value)
                     else:
                         serialized = str(value)
+                    # Make condition NULL-aware to work correctly with exclude (NOT)
                     base_condition = f"{path_expr} = {placeholder}::jsonb"
+                    condition = f"({path_expr} IS NOT NULL AND {base_condition})"
                     params.append(serialized)
-                    if negated:
-                        condition = f"({path_expr} IS NULL OR NOT {base_condition})"
-                    else:
-                        condition = base_condition
                 else:
                     if isinstance(value, bool):
                         serialized = json.dumps(value)
@@ -892,13 +877,10 @@ class QuerySet(Generic[T]):
                         serialized = json.dumps(value, separators=(',', ':'))
                     else:
                         serialized = str(value)
+                    # Make condition NULL-aware to work correctly with exclude (NOT)
                     base_condition = f"{text_path_expr} = {placeholder}::text"
+                    condition = f"({path_expr} IS NOT NULL AND {base_condition})"
                     params.append(serialized)
-                    if negated:
-                        # For PostgreSQL, check if key doesn't exist by checking if path is NULL
-                        condition = f"({path_expr} IS NULL OR NOT {base_condition})"
-                    else:
-                        condition = base_condition
             elif lookup == 'contains':
                 condition = f"{text_path_expr} LIKE {placeholder}::text"
                 params.append(f"%{value}%")
