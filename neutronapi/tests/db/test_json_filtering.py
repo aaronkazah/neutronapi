@@ -219,6 +219,125 @@ class TestJSONFiltering(unittest.IsolatedAsyncioTestCase):
         roles = [r.data['role'] for r in results_list]
         self.assertEqual(roles, ['admin', 'guest', 'user', 'user'])
 
+    async def test_json_key_exclude_exact(self):
+        """Test excluding records by exact JSON key match."""
+        # First check what data we have
+        all_results = await JsonTestModel.objects.all()
+        print(f"All records: {[(r.name, r.data) for r in all_results]}")
+
+        # Test filter first (should work)
+        filter_results = await JsonTestModel.objects.filter(data__account='test_account')
+        print(f"Filter data__account='test_account': {[r.name for r in filter_results]}")
+
+        # Exclude records with specific account
+        results = await JsonTestModel.objects.exclude(data__account='test_account')
+        results_list = list(results)
+        print(f"Exclude data__account='test_account': {[r.name for r in results_list]}")
+        print(f"Expected: user2, user3. Got: {len(results_list)} records")
+
+        # Should exclude user1 and user4, leaving user2 and user3
+        self.assertEqual(len(results_list), 2)
+        names = {r.name for r in results_list}
+        self.assertEqual(names, {'user2', 'user3'})
+
+    async def test_json_key_exclude_boolean(self):
+        """Test excluding records by JSON boolean value."""
+        # Exclude active users
+        results = await JsonTestModel.objects.exclude(data__active=True)
+        results_list = list(results)
+
+        # Should exclude user1 and user3, leaving user2 and user4
+        self.assertEqual(len(results_list), 2)
+        names = {r.name for r in results_list}
+        self.assertEqual(names, {'user2', 'user4'})
+
+    async def test_json_key_exclude_nonexistent_key(self):
+        """Test excluding by key that doesn't exist in all records."""
+        # Exclude by department key (only exists in user4)
+        results = await JsonTestModel.objects.exclude(data__department='engineering')
+        results_list = list(results)
+
+        # Should exclude user4, leaving user1, user2, user3
+        self.assertEqual(len(results_list), 3)
+        names = {r.name for r in results_list}
+        self.assertEqual(names, {'user1', 'user2', 'user3'})
+
+    async def test_json_key_exclude_nonexistent_value(self):
+        """Test excluding by value that doesn't exist (should return all)."""
+        results = await JsonTestModel.objects.exclude(data__account='nonexistent')
+        results_list = list(results)
+
+        # Should return all records since no record has 'nonexistent' account
+        self.assertEqual(len(results_list), 4)
+        names = {r.name for r in results_list}
+        self.assertEqual(names, {'user1', 'user2', 'user3', 'user4'})
+
+    async def test_multiple_json_key_excludes(self):
+        """Test excluding by multiple JSON keys."""
+        # Exclude by account AND role
+        results = await JsonTestModel.objects.exclude(
+            data__account='test_account',
+            data__role='admin'
+        )
+        results_list = list(results)
+
+        # Should exclude user1 (has both conditions), leaving user2, user3, user4
+        self.assertEqual(len(results_list), 3)
+        names = {r.name for r in results_list}
+        self.assertEqual(names, {'user2', 'user3', 'user4'})
+
+    async def test_json_key_exclude_with_other_field_filters(self):
+        """Test combining JSON key excludes with regular field filters."""
+        # Exclude by JSON key AND filter by regular field
+        results = await JsonTestModel.objects.filter(
+            count__gt=2
+        ).exclude(
+            data__account='test_account'
+        )
+        results_list = list(results)
+
+        # Filter: count > 2 gives user1, user3, user4
+        # Exclude: data__account='test_account' removes user1, user4
+        # Leaving only user3
+        self.assertEqual(len(results_list), 1)
+        self.assertEqual(results_list[0].name, 'user3')
+
+    async def test_json_key_filter_and_exclude_combination(self):
+        """Test combining filter and exclude on JSON keys."""
+        # Filter by role='user' then exclude by account='other_account'
+        results = await JsonTestModel.objects.filter(
+            data__role='user'
+        ).exclude(
+            data__account='other_account'
+        )
+        results_list = list(results)
+
+        # Filter: role='user' gives user2, user4
+        # Exclude: account='other_account' removes user2
+        # Leaving only user4
+        self.assertEqual(len(results_list), 1)
+        self.assertEqual(results_list[0].name, 'user4')
+
+    async def test_json_exact_exclude_vs_key_exclude(self):
+        """Test difference between exact JSON exclude and key exclude."""
+        # Exact JSON exclude - must match entire object
+        results_exact = await JsonTestModel.objects.exclude(
+            data={'account': 'test_account', 'role': 'admin', 'active': True, 'count': 3}
+        )
+        exact_list = list(results_exact)
+        # Should exclude only user1 (exact match)
+        self.assertEqual(len(exact_list), 3)
+        names = {r.name for r in exact_list}
+        self.assertEqual(names, {'user2', 'user3', 'user4'})
+
+        # Key exclude - excludes any object with that key-value pair
+        results_key = await JsonTestModel.objects.exclude(data__account='test_account')
+        key_list = list(results_key)
+        # Should exclude user1 and user4 (both have account='test_account')
+        self.assertEqual(len(key_list), 2)
+        names = {r.name for r in key_list}
+        self.assertEqual(names, {'user2', 'user3'})
+
 
 @unittest.skipUnless(_is_postgres_configured(), 'PostgreSQL not configured in settings.DATABASES')
 class TestJSONFilteringPostgreSQL(TestJSONFiltering):
