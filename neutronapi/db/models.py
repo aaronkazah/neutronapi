@@ -198,7 +198,7 @@ class Model(metaclass=ModelBase):
         # Decide insert vs update if not explicitly set
         if create is None:
             create = True
-            if pk_name is not None and getattr(self, pk_name, None):
+            if pk_name is not None and getattr(self, pk_name, None) not in (None, ""):
                 create = False
 
         if create:
