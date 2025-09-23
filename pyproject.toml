@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neutronapi"
-version = "0.5.0"
+version = "0.5.1"
 description = "A modern, high-performance ASGI-based Python web framework."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -29,6 +29,7 @@ dependencies = [
   "aiosqlite>=0.19.0",
   "PyJWT>=2.8.0",
   "bcrypt>=4.0.0",
+  "watchdog>=3.0.0",
 ]
 
 [project.optional-dependencies]

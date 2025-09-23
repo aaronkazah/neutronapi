@@ -141,6 +141,50 @@ class TestParsersAndMiddleware(unittest.IsolatedAsyncioTestCase):
         blob_out = json.loads(msgs_blob[1]["body"].decode())
         self.assertEqual(blob_out["len"], len(blob))
 
+    async def test_binary_parser_with_json_content_type(self):
+        """Test that BinaryParser accepts JSON content-type and returns both raw and parsed data."""
+        from neutronapi.parsers import BinaryParser
+
+        class StripeAPI(API):
+            name = "stripe"
+            resource = ""
+
+            @API.endpoint("/webhook", methods=["POST"], parsers=[BinaryParser()])
+            async def webhook(self, scope, receive, send, **kwargs):
+                # This should work with the enhanced BinaryParser
+                raw_bytes = kwargs["raw"]      # Always available - exact bytes sent
+                parsed_json = kwargs["body"]   # Parsed JSON if content-type was application/json
+                return await self.response({
+                    "has_raw": "raw" in kwargs,
+                    "raw_type": type(raw_bytes).__name__,
+                    "raw_length": len(raw_bytes),
+                    "body_type": type(parsed_json).__name__,
+                    "parsed_data": parsed_json
+                })
+
+        app = Application(apis=[StripeAPI()])
+
+        # Test with JSON content-type (like Stripe webhooks)
+        json_payload = {"id": "evt_test_123", "type": "checkout.session.completed"}
+        json_body = json.dumps(json_payload).encode("utf-8")
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/webhook",
+            "headers": [(b"content-type", b"application/json")],
+        }
+
+        messages = await call_asgi(app, scope, body=json_body)
+        self.assertEqual(messages[0]["status"], 200)
+        result = json.loads(messages[1]["body"].decode())
+
+        # Test that we get both raw bytes and parsed JSON
+        self.assertTrue(result["has_raw"])
+        self.assertEqual(result["raw_type"], "bytes")
+        self.assertEqual(result["raw_length"], len(json_body))
+        self.assertEqual(result["body_type"], "dict")
+        self.assertEqual(result["parsed_data"], json_payload)
+
     async def test_multipart_parser_with_file(self):
         from neutronapi.parsers import MultiPartParser
 

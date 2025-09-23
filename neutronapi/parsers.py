@@ -127,20 +127,38 @@ class MultiPartParser(BaseParser):
 
 
 class BinaryParser(BaseParser):
-    """Parser for binary data (application/octet-stream)."""
-    
-    media_types = ["application/octet-stream"]
+    """Parser that always returns raw bytes, with optional JSON parsing."""
+
+    media_types = ["*/*"]
+
+    def matches(self, headers: Dict[bytes, bytes]) -> bool:
+        """Always match - we want raw bytes regardless of content-type."""
+        return True
 
     async def parse(self, scope: Dict[str, Any], receive: Any, *, raw_body: bytes, headers: Dict[bytes, bytes]) -> Dict[str, Any]:
-        """Parse binary data.
-        
+        """Always return raw bytes, with optional parsed JSON if applicable.
+
         Args:
             scope: ASGI scope
             receive: ASGI receive callable
             raw_body: Raw request body bytes
             headers: Request headers
-            
+
         Returns:
-            Dict with 'body' key containing raw bytes
+            Dict with 'raw' key containing raw bytes and 'body' key with parsed data
         """
-        return {"body": raw_body or b""}
+        result = {"raw": raw_body or b""}
+
+        # If it looks like JSON, also parse it
+        ctype = (headers.get(b"content-type") or b"").split(b";", 1)[0].strip().lower()
+        if ctype == b"application/json" and raw_body:
+            try:
+                import json
+                parsed = json.loads(raw_body.decode("utf-8"))
+                result["body"] = parsed
+            except Exception:
+                result["body"] = raw_body  # Fallback to raw if JSON parsing fails
+        else:
+            result["body"] = raw_body
+
+        return result
