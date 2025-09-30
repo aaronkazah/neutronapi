@@ -178,6 +178,10 @@ class Application:
                 resp = Response(body=err, status_code=404)
                 await resp(scope, receive, send)
 
+        # Set lifecycle hooks on app function so RoutingMiddleware can find them
+        app.on_startup = []
+        app.on_shutdown = []
+
         # Build base router app
         base_router = RoutingMiddleware(
             default_app=app,
@@ -211,13 +215,10 @@ class Application:
                                                allowed_hosts=allowed_hosts) if allowed_hosts else base_router
             self.app = CorsMiddleware(hosts_app, allow_all_origins=cors_allow_all)
 
-        # lifecycle hooks
-        self.app.on_startup = []
-        self.app.on_shutdown = []
-
         # Expose lifecycle hooks on Application instance for compatibility
-        self.on_startup = self.app.on_startup
-        self.on_shutdown = self.app.on_shutdown
+        # (handlers are already set on the app function above)
+        self.on_startup = app.on_startup
+        self.on_shutdown = app.on_shutdown
 
         # Handle tasks dict - clean API-like pattern
         if tasks:
@@ -234,8 +235,8 @@ class Application:
             async def _stop_background():
                 await self.background.stop()
 
-            self.app.on_startup.append(_start_background)
-            self.app.on_shutdown.append(_stop_background)
+            app.on_startup.append(_start_background)
+            app.on_shutdown.append(_stop_background)
 
     def _validate_registry_key(self, key: str) -> None:
         """Validate registry key follows namespace:name format.

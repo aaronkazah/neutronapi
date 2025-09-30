@@ -51,19 +51,9 @@ class RoutingMiddleware:
         """Run all registered startup handlers."""
         logger.debug("Running startup handlers")
 
-        # Check if our app or its wrapped apps have startup handlers
-        app = self.default_app
-        startup_handlers = []
-
-        # Try to find startup handlers at different layers of the application
-        if hasattr(app, "on_startup"):
-            startup_handlers = app.on_startup
-        elif hasattr(app, "app") and hasattr(
-            app.app, "on_startup"
-        ):  # Check one level down (CORS wrapping)
-            startup_handlers = app.app.on_startup
-        elif hasattr(app, "default_app") and hasattr(app.default_app, "on_startup"):
-            startup_handlers = app.default_app.on_startup
+        # Get startup handlers from default_app (which is the base_router)
+        # Application.__init__ sets handlers on base_router for this purpose
+        startup_handlers = getattr(self.default_app, "on_startup", [])
 
         if startup_handlers:
             logger.debug(f"Found {len(startup_handlers)} startup handlers")
