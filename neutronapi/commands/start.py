@@ -431,7 +431,6 @@ For all options: python manage.py start --help"""
             from watchdog.observers import Observer
             from watchdog.events import FileSystemEventHandler
         except ImportError:
-            print("Warning: watchdog not available, using uvicorn's built-in reload")
             # Fall back to uvicorn reload
             return await self._start_uvicorn_with_reload(args, entry_point)
 
@@ -555,6 +554,5 @@ For all options: python manage.py start --help"""
 
     async def _start_uvicorn_with_reload(self, args: List[str], entry_point: str) -> None:
         """Fallback to uvicorn's built-in reload."""
-        print("Using uvicorn's built-in reload...")
         # Continue with the original uvicorn implementation
         import os
