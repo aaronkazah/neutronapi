@@ -228,10 +228,19 @@ class PostgreSQLProvider(BaseProvider):
     async def create_table(self, app_label: str, table_base_name: str, fields: List[Tuple[str, Any]]):
         schema = self._pg_ident(app_label)
         table = self._pg_ident(table_base_name)
-        
+
         await self.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+
+        # Check if table exists - if so, ensure all columns exist (idempotent behavior)
         if await self.table_exists(f"{app_label}.{table_base_name}"):
+            # Table exists - check for missing columns and add them
+            for name, field in fields:
+                if not await self.column_exists(app_label, table_base_name, name):
+                    # Column doesn't exist - add it using add_column for proper handling
+                    await self.add_column(app_label, table_base_name, name, field)
             return
+
+        # Table doesn't exist - create it with all fields
         field_defs = []
         primary_keys = []
         for name, field in fields:
@@ -255,7 +264,7 @@ class PostgreSQLProvider(BaseProvider):
             field_defs.append(" ".join(parts))
         if primary_keys:
             field_defs.append(f"PRIMARY KEY ({', '.join(primary_keys)})")
-        
+
         create_sql = f"CREATE TABLE {schema}.{table} ({', '.join(field_defs)})"
         await self.execute(create_sql)
 
