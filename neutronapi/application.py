@@ -180,6 +180,7 @@ class Application:
 
             elif scope["type"] == "websocket":
                 path = scope.get("path", "/")
+                print(f"[WS-ROUTE] Routing websocket: path={path}")
 
                 # Check if path matches any API exactly
                 if path in self._resource_apis:
@@ -190,10 +191,12 @@ class Application:
                 # Check if path starts with any API prefix
                 for api_path, api in self._resource_apis.items():
                     if path.startswith(api_path):
+                        print(f"[WS-ROUTE] Matched API: api_path={api_path}")
                         await api.handle(scope, receive, send)
                         return
 
                 # No matching API for websocket - close connection
+                print(f"[WS-ROUTE] No match! Available APIs: {list(self._resource_apis.keys())}")
                 await send({"type": "websocket.close", "code": 4004})
 
         # Set lifecycle hooks on app function so RoutingMiddleware can find them
