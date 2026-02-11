@@ -92,6 +92,73 @@ class ExcludeEndpointAPI(API):
         return await self.response({"private": True})
 
 
+class MetadataAPI(API):
+    resource = "/v1/meta"
+    name = "meta"
+
+    @API.endpoint(
+        "/",
+        methods=["GET"],
+        name="list",
+        summary="List metadata entries",
+        description="Returns all metadata entries.",
+        tags=["MetaCustom"],
+        parameters=[
+            {
+                "name": "cursor",
+                "in": "query",
+                "required": False,
+                "schema": {"type": "string"},
+            }
+        ],
+        responses={
+            200: {
+                "description": "Custom list response",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "object": {"type": "string", "example": "list"},
+                                "data": {"type": "array", "items": {"type": "object"}},
+                                "has_more": {"type": "boolean"},
+                            },
+                            "required": ["object", "data", "has_more"],
+                        }
+                    }
+                },
+            }
+        },
+    )
+    async def list_meta(self, scope, receive, send, **kwargs):
+        return await self.response({"object": "list", "data": [], "has_more": False})
+
+    @API.endpoint(
+        "/<int:item_id>",
+        methods=["POST"],
+        name="create",
+        summary="Create metadata entry",
+        description="Creates a metadata entry for an item.",
+        tags=["MetaCustom"],
+        request_schema={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+        },
+        response_schema={
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer"},
+                "object": {"type": "string"},
+                "value": {"type": "string"},
+            },
+            "required": ["id", "object", "value"],
+        },
+    )
+    async def create_meta(self, scope, receive, send, item_id=None, **kwargs):
+        return await self.response({"id": item_id, "object": "meta", "value": "ok"})
+
+
 class TestOpenAPI(unittest.IsolatedAsyncioTestCase):
     async def test_generate_from_api(self):
         gen = OpenAPIGenerator(title="Test", description="D", version="1.0.0")
@@ -336,3 +403,41 @@ class TestOpenAPI(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/v1/mixed/public", spec["paths"])
         self.assertIn("/v1/mixed/private", spec["paths"])  # Private endpoint included
 
+    async def test_detail_get_does_not_include_pagination_parameters(self):
+        """Detail GET endpoints should only include path params, not pagination params."""
+        gen = OpenAPIGenerator(title="Test Params", version="1.0.0")
+        spec = await gen.generate_from_api(UsersAPI())
+
+        detail_get = spec["paths"]["/v1/users/{user_id}"]["get"]
+        param_names = [p["name"] for p in detail_get.get("parameters", [])]
+
+        self.assertIn("user_id", param_names)
+        self.assertNotIn("page", param_names)
+        self.assertNotIn("page_size", param_names)
+        self.assertNotIn("ordering", param_names)
+
+    async def test_endpoint_metadata_not_overwritten(self):
+        """Custom endpoint metadata should not be overwritten by auto-generated values."""
+        gen = OpenAPIGenerator(title="Test Meta", version="1.0.0")
+        spec = await gen.generate_from_api(MetadataAPI())
+
+        list_get = spec["paths"]["/v1/meta/"]["get"]
+        self.assertEqual(list_get["summary"], "List metadata entries")
+        self.assertEqual(list_get["description"], "Returns all metadata entries.")
+        self.assertEqual(list_get["tags"], ["MetaCustom"])
+        self.assertEqual(list_get["parameters"][0]["name"], "cursor")
+        self.assertEqual(
+            list_get["responses"]["200"]["description"], "Custom list response"
+        )
+
+        create_post = spec["paths"]["/v1/meta/{item_id}"]["post"]
+        request_schema = create_post["requestBody"]["content"]["application/json"][
+            "schema"
+        ]
+        self.assertEqual(request_schema["required"], ["value"])
+        self.assertEqual(
+            create_post["responses"]["200"]["content"]["application/json"]["schema"][
+                "required"
+            ],
+            ["id", "object", "value"],
+        )

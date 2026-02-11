@@ -325,7 +325,13 @@ class OpenAPIGenerator:
                 continue
 
             operation = await self._create_operation(
-                api, handler, method, name, permission_classes, throttle_classes
+                api,
+                handler,
+                method,
+                name,
+                path,
+                permission_classes,
+                throttle_classes,
             )
 
             self.spec["paths"][openapi_path][method_lower] = operation
@@ -336,6 +342,7 @@ class OpenAPIGenerator:
         handler: callable,
         method: str,
         name: Optional[str],
+        path: str,
         permission_classes: List[Any],
         throttle_classes: List[Any],
     ) -> Dict[str, Any]:
@@ -347,7 +354,9 @@ class OpenAPIGenerator:
             "summary": self._get_summary(handler, method, name, endpoint_metadata),
             "description": self._get_description(handler, api, endpoint_metadata),
             "operationId": self._generate_operation_id(api, handler, method, name),
-            "responses": self._get_responses(api, handler, method, endpoint_metadata),
+            "responses": self._get_responses(
+                api, handler, method, endpoint_metadata, name
+            ),
         }
 
         # Add tags from endpoint metadata or API
@@ -356,7 +365,9 @@ class OpenAPIGenerator:
             operation["tags"] = tags
 
         # Add parameters from endpoint metadata or auto-generate
-        parameters = self._get_parameters(api, method, endpoint_metadata)
+        parameters = self._get_parameters(
+            api, method, endpoint_metadata, handler, name, path
+        )
         if parameters:
             operation["parameters"] = parameters
 
@@ -369,23 +380,6 @@ class OpenAPIGenerator:
         # Mark as deprecated if specified
         if endpoint_metadata and endpoint_metadata.deprecated:
             operation["deprecated"] = True
-
-        # Add tags
-        if api.tags:
-            operation["tags"] = api.tags
-        elif api.name:
-            operation["tags"] = [api.name.title()]
-
-        # Add parameters
-        parameters = self._generate_parameters(api, method)
-        if parameters:
-            operation["parameters"] = parameters
-
-        # Add request body for POST/PUT/PATCH
-        if method.upper() in ["POST", "PUT", "PATCH"]:
-            request_body = self._generate_request_body(api, handler)
-            if request_body:
-                operation["requestBody"] = request_body
 
         # Add security if authentication is required
         if api.authentication_class or permission_classes:
@@ -420,15 +414,26 @@ class OpenAPIGenerator:
         return None
 
     def _get_parameters(
-        self, api: API, method: str, endpoint_metadata
+        self,
+        api: API,
+        method: str,
+        endpoint_metadata,
+        handler: callable,
+        operation_name: Optional[str],
+        path: str,
     ) -> Optional[List[Dict[str, Any]]]:
         """Get parameters from endpoint metadata or auto-generate."""
         if endpoint_metadata and endpoint_metadata.parameters:
             return endpoint_metadata.parameters
-        return self._generate_parameters(api, method)
+        return self._generate_parameters(api, method, handler, operation_name, path)
 
     def _get_responses(
-        self, api: API, handler: callable, method: str, endpoint_metadata
+        self,
+        api: API,
+        handler: callable,
+        method: str,
+        endpoint_metadata,
+        operation_name: Optional[str],
     ) -> Dict[str, Any]:
         """Get responses from endpoint metadata or auto-generate."""
         if endpoint_metadata and endpoint_metadata.responses:
@@ -437,7 +442,7 @@ class OpenAPIGenerator:
             if 200 not in responses:
                 # Add default 200 response
                 schema = endpoint_metadata.response_schema or self._get_response_schema(
-                    api, handler, method
+                    api, handler, method, operation_name
                 )
                 responses[200] = {
                     "description": "Successful response",
@@ -455,7 +460,12 @@ class OpenAPIGenerator:
                 )
                 for k, v in responses.items()
             }
-        return self._generate_responses(api, handler, method)
+        responses = self._generate_responses(api, handler, method, operation_name)
+        if endpoint_metadata and endpoint_metadata.response_schema:
+            responses.setdefault("200", {}).setdefault("content", {}).setdefault(
+                "application/json", {}
+            )["schema"] = endpoint_metadata.response_schema
+        return responses
 
     def _get_request_body(
         self, api: API, method: str, endpoint_metadata
@@ -510,7 +520,7 @@ class OpenAPIGenerator:
         return f"{api_name}_{operation_name}_{method.lower()}"
 
     def _generate_responses(
-        self, api: API, handler: callable, method: str
+        self, api: API, handler: callable, method: str, operation_name: Optional[str]
     ) -> Dict[str, Any]:
         """Generate response definitions."""
         responses = {
@@ -518,7 +528,9 @@ class OpenAPIGenerator:
                 "description": "Successful response",
                 "content": {
                     "application/json": {
-                        "schema": self._get_response_schema(api, handler, method)
+                        "schema": self._get_response_schema(
+                            api, handler, method, operation_name
+                        )
                     }
                 },
             }
@@ -568,13 +580,15 @@ class OpenAPIGenerator:
         return responses
 
     def _get_response_schema(
-        self, api: API, handler: callable, method: str
+        self,
+        api: API,
+        handler: callable,
+        method: str,
+        operation_name: Optional[str],
     ) -> Dict[str, Any]:
         """Get the response schema for an operation."""
         # Check if it's a list operation first
-        if handler.__name__ == "list" or (
-            method.upper() == "GET" and not hasattr(handler, "__self__")
-        ):
+        if self._is_list_operation(method, handler, operation_name):
             if hasattr(api, "list_response_schema") and api.list_response_schema:
                 return api.list_response_schema
             return self._generate_list_schema(api)
@@ -599,26 +613,38 @@ class OpenAPIGenerator:
             elif hasattr(api, "response_schema") and api.response_schema:
                 item_schema = api.response_schema
 
+        list_url = "/"
+        if api and getattr(api, "resource", None):
+            list_url = api.resource
+
         return {
             "type": "object",
             "properties": {
                 "object": {"type": "string", "example": "list"},
                 "data": {"type": "array", "items": item_schema},
-                "page": {"type": "integer"},
-                "page_size": {"type": "integer"},
-                "count": {"type": "integer"},
-                "num_pages": {"type": "integer"},
                 "has_more": {"type": "boolean"},
+                "url": {"type": "string", "example": list_url},
             },
-            "required": ["object", "data"],
+            "required": ["object", "data", "has_more", "url"],
         }
 
-    def _generate_parameters(self, api: API, method: str) -> List[Dict[str, Any]]:
+    def _generate_parameters(
+        self,
+        api: API,
+        method: str,
+        handler: callable,
+        operation_name: Optional[str],
+        path: str,
+    ) -> List[Dict[str, Any]]:
         """Generate parameters for the operation."""
         parameters = []
 
+        # Path parameters from URL pattern
+        path_parameters = self._extract_path_parameters(path)
+        parameters.extend(path_parameters)
+
         # Add pagination parameters for GET requests
-        if method.upper() == "GET":
+        if self._is_list_operation(method, handler, operation_name):
             parameters.extend(
                 [
                     {
@@ -651,6 +677,49 @@ class OpenAPIGenerator:
             )
 
         return parameters
+
+    def _extract_path_parameters(self, path: str) -> List[Dict[str, Any]]:
+        """Extract OpenAPI path parameters from route path patterns."""
+        if not path:
+            return []
+
+        param_type_map = {
+            "int": "integer",
+            "str": "string",
+            "path": "string",
+            "slug": "string",
+            "uuid": "string",
+        }
+
+        params: List[Dict[str, Any]] = []
+        for match in re.finditer(r"<(\w+):(\w+)>", path):
+            raw_type, name = match.groups()
+            params.append(
+                {
+                    "name": name,
+                    "in": "path",
+                    "description": f"Path parameter: {name}",
+                    "required": True,
+                    "schema": {"type": param_type_map.get(raw_type, "string")},
+                }
+            )
+        return params
+
+    def _is_list_operation(
+        self, method: str, handler: callable, operation_name: Optional[str]
+    ) -> bool:
+        """Determine if an operation is a collection/list operation."""
+        if method.upper() != "GET":
+            return False
+
+        candidates = [
+            operation_name or "",
+            getattr(handler, "__name__", ""),
+        ]
+        for candidate in candidates:
+            if candidate and candidate.lower().startswith("list"):
+                return True
+        return False
 
     def _generate_request_body(
         self, api: API, handler: callable
