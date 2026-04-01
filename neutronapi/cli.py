@@ -1,215 +1,151 @@
-"""
-NeutronAPI CLI entrypoint.
-
-Exposes a command interface similar to `manage.py`, so installed users
-can run `neutronapi <command>` in their projects.
-
-Discovers built-in commands from `neutronapi.commands` and project
-commands from `apps/*/commands`.
-"""
+"""NeutronAPI command-line entrypoint."""
 from __future__ import annotations
 
+import asyncio
+import inspect
 import os
 import sys
-import asyncio
-import importlib
-from typing import Dict, Any
+from typing import Any, Dict
+
+from neutronapi.command_discovery import discover_all_commands
+from neutronapi.conf import is_neutronapi_development
+from neutronapi.diagnostics import run_project_checks
+from neutronapi.exceptions import CommandError
+from neutronapi.scaffold import ensure_project_root
 
 
-def _project_required_files() -> list[str]:
-    base = os.getcwd()
-    apps_dir = os.path.join(base, 'apps')
-    return [
-        os.path.join(apps_dir, 'settings.py'),
-        os.path.join(apps_dir, 'entry.py'),
-    ]
+AUTO_CHECK_COMMANDS = {"migrate", "makemigrations", "shell", "start", "test"}
+PROJECT_COMMANDS = AUTO_CHECK_COMMANDS | {"check", "startapp"}
 
 
-def _discover_commands_from(prefix: str, exclude_cli_only: bool = False) -> Dict[str, Any]:
-    commands: Dict[str, Any] = {}
-    cli_only_commands = {'startproject'}  # Commands only available via CLI, not manage.py
-
-    try:
-        import pkgutil
-        pkg = importlib.import_module(f"{prefix}.commands")
-        for _, name, ispkg in pkgutil.iter_modules(pkg.__path__):
-            if not ispkg:
-                # Skip CLI-only commands if requested
-                if exclude_cli_only and name in cli_only_commands:
-                    continue
-
-                try:
-                    module = importlib.import_module(f"{prefix}.commands.{name}")
-                    if hasattr(module, 'Command'):
-                        commands[name] = module.Command()
-                except Exception:
-                    # Skip modules that fail to import (syntax errors, missing deps, etc.)
-                    pass
-    except Exception:
-        pass
-    return commands
+def _running_via_manage_py() -> bool:
+    return os.path.basename(sys.argv[0]) == "manage.py"
 
 
 def discover_commands() -> Dict[str, Any]:
-    """Discover commands from neutronapi.commands and apps/*/commands directories."""
-    commands: Dict[str, Any] = {}
+    return discover_all_commands().commands
 
-    # Built-in commands
+
+def _print_command_list(commands: Dict[str, Any]) -> None:
+    print("Available commands:")
+    for command_name in sorted(commands):
+        command = commands[command_name]
+        help_text = getattr(command, "help", "No description available").splitlines()[0]
+        print(f"  {command_name:<15} {help_text}")
+    print("\nUse 'neutronapi <command> --help' for detailed usage")
+
+
+def _coerce_command_result(result: Any) -> int:
+    return result if isinstance(result, int) else 0
+
+
+def _invoke_handle(command: Any, args: list[str]):
+    handle = getattr(command, "handle", None)
+    if handle is None:
+        raise CommandError(f"Command '{command.__class__.__name__}' is missing handle().")
+
+    signature = inspect.signature(handle)
+    parameters = list(signature.parameters.values())
+    if any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
+        return handle(*args)
+    if not parameters:
+        return handle()
+    return handle(args)
+
+
+async def _run_command(command_name: str, command: Any, args: list[str]) -> int:
+    result = _invoke_handle(command, args)
+    if inspect.isawaitable(result):
+        result = await result
+    return _coerce_command_result(result)
+
+
+async def _shutdown_connections() -> None:
     try:
-        commands.update(_discover_commands_from("neutronapi"))
+        from neutronapi.db import shutdown_all_connections
+
+        await asyncio.wait_for(shutdown_all_connections(), timeout=5)
+    except asyncio.TimeoutError:
+        print("Warning: database shutdown timed out.")
     except Exception:
         pass
 
-    # Project app-specific commands
-    apps_dir = os.path.join(os.getcwd(), 'apps')
-    if os.path.isdir(apps_dir):
-        # Add the project root to sys.path so we can import apps
-        project_root = os.getcwd()
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        
-        for app_name in os.listdir(apps_dir):
-            app_path = os.path.join(apps_dir, app_name)
-            if os.path.isdir(app_path) and not app_name.startswith('.'):
-                app_commands_dir = os.path.join(app_path, 'commands')
-                if os.path.isdir(app_commands_dir):
-                    for filename in os.listdir(app_commands_dir):
-                        if filename.endswith('.py') and not filename.startswith('__'):
-                            command_name = filename[:-3]
-                            try:
-                                # Clear import cache to ensure fresh imports during testing
-                                module_name = f"apps.{app_name}.commands.{command_name}"
-                                parent_modules = [
-                                    "apps",
-                                    f"apps.{app_name}",
-                                    f"apps.{app_name}.commands",
-                                    module_name
-                                ]
-                                for mod in parent_modules:
-                                    if mod in sys.modules:
-                                        del sys.modules[mod]
-                                
-                                module = importlib.import_module(module_name)
-                                if hasattr(module, 'Command'):
-                                    commands[command_name] = module.Command()
-                            except Exception as e:
-                                # Skip modules that fail to import (syntax errors, missing deps, etc.)
-                                # print(f"Failed to import apps.{app_name}.commands.{command_name}: {e}")
-                                pass
 
-    return commands
-
-
-def main() -> None:
-    # Load commands first so startproject can run outside a project
-    commands = discover_commands()
-
-    # Add CLI-only commands (not available in manage.py)
-    from neutronapi.commands import startproject
-    commands['startproject'] = startproject.Command()
-
-    if len(sys.argv) < 2:
-        print("Available commands:")
-        for cmd in sorted(commands.keys()):
-            print(f"  {cmd}")
-        print("\nUse 'neutronapi <command> --help' for detailed usage")
+def _require_project(command_name: str) -> None:
+    if command_name not in PROJECT_COMMANDS:
         return
-
-    command_name = sys.argv[1]
-    args = sys.argv[2:]
-
-    # Handle --help for any command
-    if "--help" in args or command_name == "--help":
-        if command_name == "--help":
-            print("Available commands:")
-            for cmd in sorted(commands.keys()):
-                command_obj = commands[cmd]
-                help_text = getattr(command_obj, 'help', 'No description available')
-                print(f"  {cmd:<15} {help_text}")
-            print("\nUse 'neutronapi <command> --help' for detailed usage")
+    if command_name == "check":
+        return
+    try:
+        ensure_project_root(os.getcwd())
+    except CommandError:
+        if command_name in AUTO_CHECK_COMMANDS and is_neutronapi_development():
             return
-        elif command_name in commands:
-            # Show help for specific command
-            command_obj = commands[command_name]
-            help_text = getattr(command_obj, 'help', 'No description available')
-            print(f"Usage: neutronapi {command_name}")
-            print(f"Description: {help_text}")
+        raise
 
-            # Show additional help if command has detailed help
-            if hasattr(command_obj, 'get_help'):
-                print(command_obj.get_help())
-            return
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    discovery = discover_all_commands(exclude_cli_only=_running_via_manage_py())
+    commands = discovery.commands
+
+    if not argv:
+        _print_command_list(commands)
+        return 0
+
+    command_name = argv[0]
+    args = argv[1:]
+
+    if command_name in {"--help", "-h", "help"}:
+        _print_command_list(commands)
+        return 0
 
     if command_name not in commands:
-        print(f"Unknown command: {command_name}")
-        print("Available commands:", ", ".join(sorted(commands.keys())))
-        sys.exit(1)
+        matching_error = next(
+            (error for error in discovery.errors if error.command_name == command_name),
+            None,
+        )
+        if matching_error is not None:
+            print(
+                f"Error: Command '{command_name}' could not be loaded from "
+                f"'{matching_error.module_name}'."
+            )
+            print(f"HINT: {matching_error.error}")
+        else:
+            print(f"Unknown command: {command_name}")
+            print("Available commands:", ", ".join(sorted(commands.keys())))
+        return 1
 
-    # Validate project layout only for project-scoped commands
-    # Keep 'test' and other generic commands runnable without a project scaffold
-    requires_project = {"migrate", "makemigrations", "startapp", "shell"}
-    if command_name in requires_project:
-        missing = [p for p in _project_required_files() if not os.path.isfile(p)]
-        if missing:
-            rel_missing = [os.path.relpath(p, os.getcwd()) for p in missing]
-            print("Project misconfigured: required files missing.")
-            for p in rel_missing:
-                print(f"  - {p}")
-            print("Both 'apps/entry.py' and 'apps/settings.py' must exist at the same level.")
-            sys.exit(1)
+    skip_checks = False
+    if "--skip-checks" in args:
+        skip_checks = True
+        args = [arg for arg in args if arg != "--skip-checks"]
 
-    async def _dispatch():
-        databases = None
-        try:
-            # Initialize database connections automatically
-            from neutronapi.db import get_databases
-            databases = get_databases()
+    try:
+        _require_project(command_name)
 
-            command = commands[command_name]
-            handle = getattr(command, 'handle', None)
-            if handle is None:
-                raise RuntimeError("Command has no handle()")
+        if command_name in AUTO_CHECK_COMMANDS and not skip_checks:
+            check_exit = run_project_checks(quiet=True)
+            if check_exit != 0:
+                return check_exit
 
-            # ALWAYS expect async - no fallback!
-            if not asyncio.iscoroutinefunction(handle):
-                raise RuntimeError(f"Command {command_name} handle() must be async")
+        return asyncio.run(_run_command(command_name, commands[command_name], args))
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user.")
+        return 1
+    except CommandError as exc:
+        print(f"Error: {exc}")
+        return 1
+    except Exception as exc:
+        print(f"Error while running '{command_name}': {exc}")
+        if os.getenv("DEBUG", "false").lower() == "true":
+            import traceback
 
-            result = await handle(args)
-            exit_code = result if isinstance(result, int) else 0
-        except KeyboardInterrupt:
-            print("\nOperation cancelled by user.")
-            exit_code = 1
-        except SystemExit as e:
-            exit_code = e.code if e.code is not None else 1
-            raise
-        except Exception as e:
-            print(f"\nAn error occurred while running command '{command_name}': {e}")
-            if os.getenv("DEBUG", "False").lower() == "true":
-                import traceback
-                traceback.print_exc()
-            exit_code = 1
-        finally:
-            # Clean up database connections automatically (same pattern as test command)
-            try:
-                from neutronapi.db import shutdown_all_connections
-                await asyncio.wait_for(shutdown_all_connections(), timeout=5)
-            except asyncio.TimeoutError:
-                print("Warning: Database shutdown timed out, forcing shutdown.")
-            except ImportError:
-                # No database connections to shut down
-                pass
-            except Exception:
-                pass
-
-            # Flush output buffers before force exit
-            sys.stdout.flush()
-            sys.stderr.flush()
-
-            # Force exit like test command does (same pattern as test command)
-            os._exit(exit_code)
-
-    asyncio.run(_dispatch())
+            traceback.print_exc()
+        return 1
+    finally:
+        asyncio.run(_shutdown_connections())
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

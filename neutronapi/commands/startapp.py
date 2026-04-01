@@ -1,50 +1,51 @@
-"""
-Startapp command: scaffolds a new app under ./apps.
+"""Create or repair an app scaffold under ./apps."""
+from __future__ import annotations
 
-Usage:
-  neutronapi startapp <app_name>
-"""
 import os
 from typing import List
 
-
-MODELS_TEMPLATE = """# Example models module for {app_name}
-# Replace with your actual models once your ORM is in place.
-
-class Example:
-    pass
-"""
+from neutronapi.exceptions import CommandError
+from neutronapi.scaffold import (
+    ensure_app_destination,
+    ensure_project_root,
+    format_scaffold_report,
+    scaffold_app,
+)
 
 
 class Command:
     def __init__(self):
-        self.help = "Create a new app in ./apps"
+        self.help = "Create or repair an app scaffold under ./apps."
 
-    async def handle(self, args: List[str]) -> None:
-        if not args or (args and args[0] == "--help"):
-            print("Usage: neutronapi startapp <app_name>")
-            print(f"Description: {self.help}")
-            return
+    async def handle(self, args: List[str]) -> int:
+        if not args or any(arg in {"--help", "-h", "help"} for arg in args):
+            print("Usage: python manage.py startapp <app_name> [apps/<app_dir>] [--force]")
+            print(self.help)
+            return 0
 
-        app_name = args[0]
-        base = os.path.join(os.getcwd(), 'apps', app_name)
+        force = False
+        positional: list[str] = []
+        for arg in args:
+            if arg == "--force":
+                force = True
+            else:
+                positional.append(arg)
 
-        if os.path.exists(base):
-            print(f"App '{app_name}' already exists at {base}")
-            return
+        if len(positional) not in {1, 2}:
+            raise CommandError("startapp expects an app name and an optional destination under apps/.")
 
-        # Create directories
-        os.makedirs(os.path.join(base, 'migrations'), exist_ok=True)
-        os.makedirs(os.path.join(base, 'tests'), exist_ok=True)
-        os.makedirs(os.path.join(base, 'commands'), exist_ok=True)
+        app_name = positional[0]
+        project_root = ensure_project_root(os.getcwd())
+        destination = ensure_app_destination(
+            project_root,
+            app_name,
+            positional[1] if len(positional) == 2 else None,
+        )
 
-        # __init__.py files
-        for p in [base, os.path.join(base, 'migrations'), os.path.join(base, 'tests')]:
-            with open(os.path.join(p, '__init__.py'), 'w') as f:
-                f.write("")
-
-        # models.py
-        with open(os.path.join(base, 'models.py'), 'w') as f:
-            f.write(MODELS_TEMPLATE.format(app_name=app_name))
-
-        print(f"✓ App '{app_name}' created at apps/{app_name}")
+        result = scaffold_app(app_name, str(destination), force=force)
+        print(format_scaffold_report(f"App '{app_name}'", result, force=force))
+        print("Next steps:")
+        print(f"  Wire apps.{app_name}.api into apps.entry")
+        print("  python manage.py check")
+        print("  python manage.py test")
+        return 0

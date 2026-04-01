@@ -5,6 +5,8 @@ Apply database migrations from numbered files.
 import os
 from typing import List, Optional
 
+from neutronapi.exceptions import CommandError
+
 
 class Command:
     """File-based migrate command class."""
@@ -40,7 +42,7 @@ class Command:
         
         return database_alias, show_migrations, show_help
 
-    async def handle(self, args: List[str]) -> None:
+    async def handle(self, args: List[str]) -> int:
         """
         Apply database migrations from numbered migration files.
 
@@ -73,7 +75,7 @@ class Command:
         if show_help:
             print(f"{self.help}\n")
             print(self.handle.__doc__)
-            return
+            return 0
 
         try:
             from neutronapi.db.migration_tracker import MigrationTracker
@@ -123,14 +125,12 @@ class Command:
                     await connection.close()
 
         except ImportError as e:
-            print(f"Error: Could not import migration modules: {e}")
-            print("Make sure the database modules are properly installed.")
-            return
+            raise CommandError(
+                f"Could not import migration modules: {e}. "
+                "Make sure the database modules are installed."
+            )
         except Exception as e:
-            print(f"Error applying migrations: {e}")
-            import traceback
-            traceback.print_exc()
-            return
+            raise CommandError(f"Error applying migrations: {e}")
         finally:
             # Ensure all async DB connections are closed so the event loop can exit
             try:
@@ -139,3 +139,4 @@ class Command:
             except Exception:
                 # Don't block shutdown on close errors
                 pass
+        return 0

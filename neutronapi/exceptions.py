@@ -50,6 +50,11 @@ class ValidationError(Exception):
     pass
 
 
+class CommandError(Exception):
+    """A management command could not complete successfully."""
+    pass
+
+
 class ObjectDoesNotExist(Exception):
     """The requested object does not exist."""
     silent_variable_failure = True
@@ -58,4 +63,3 @@ class ObjectDoesNotExist(Exception):
 class MultipleObjectsReturned(Exception):
     """The query returned multiple objects when only one was expected."""
     pass
-

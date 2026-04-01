@@ -11,12 +11,14 @@ from __future__ import annotations
 import os
 from typing import List
 
+from neutronapi.exceptions import CommandError
+
 
 class Command:
     def __init__(self):
         self.help = "Detect model changes and write numbered migration files (0001_*.py, 0002_*.py, ...)"
 
-    async def handle(self, args: List[str]) -> None:
+    async def handle(self, args: List[str]) -> int:
         """Create new migrations based on changes detected to your models.
 
         Examples:
@@ -27,7 +29,7 @@ class Command:
         if args and args[0] in {"--help", "-h", "help"}:
             print(f"{self.help}\n")
             print(self.handle.__doc__)
-            return
+            return 0
 
         try:
             # Import here to avoid import-time project requirements
@@ -64,11 +66,12 @@ class Command:
 
             if not any_changes:
                 print("No changes detected")
+            return 0
 
         except ImportError as e:
-            print(f"Error: Unable to import migration modules: {e}")
+            raise CommandError(f"Unable to import migration modules: {e}")
         except Exception as e:
-            print(f"Error creating migrations: {e}")
             if os.getenv("DEBUG", "False").lower() == "true":
                 import traceback
                 traceback.print_exc()
+            raise CommandError(f"Error creating migrations: {e}")

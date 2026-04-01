@@ -7,6 +7,8 @@ import sys
 import asyncio
 from typing import List
 
+from neutronapi.exceptions import CommandError
+
 
 class Command:
     """Interactive shell command class."""
@@ -14,7 +16,7 @@ class Command:
     def __init__(self):
         self.help = "Launch an interactive Python shell with the project initialized"
 
-    async def handle(self, args: List[str]) -> None:
+    async def handle(self, args: List[str]) -> int:
         """
         Launch an interactive Python shell with the project initialized.
 
@@ -37,7 +39,7 @@ class Command:
         if args and args[0] in ["--help", "-h", "help"]:
             print(f"{self.help}\n")
             print(self.handle.__doc__)
-            return
+            return 0
 
         print("Starting interactive Python shell...")
         print("Project modules are available for import.")
@@ -99,10 +101,11 @@ print()
         except KeyboardInterrupt:
             print("\nShell interrupted by user")
         except Exception as e:
-            print(f"Error starting shell: {e}")
+            raise CommandError(f"Error starting shell: {e}")
         finally:
             # Clean up startup file
             try:
                 os.remove(startup_file)
             except OSError:
                 pass
+        return 0

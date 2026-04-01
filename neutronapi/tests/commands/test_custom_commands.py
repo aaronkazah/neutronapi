@@ -31,7 +31,7 @@ class TestCustomCommands(unittest.IsolatedAsyncioTestCase):
         with open("apps/settings.py", "w") as f:
             f.write("""
 # Minimal settings for testing
-DATABASE_URL = "sqlite:///test.db"
+ENTRY = "apps.entry:app"
 DATABASES = {
     'default': {
         'ENGINE': 'sqlite',
@@ -44,9 +44,9 @@ DATABASES = {
         with open("apps/entry.py", "w") as f:
             f.write("""
 # Minimal entry.py for testing
-from neutronapi import NeutronAPI
+from neutronapi.application import Application
 
-app = NeutronAPI()
+app = Application()
 """)
         
         # Create a test app with custom commands

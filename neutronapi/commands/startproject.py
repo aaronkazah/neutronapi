@@ -1,156 +1,41 @@
-"""
-CLI-only startproject command - not available in manage.py commands.
-"""
-import os
+"""Create or repair a NeutronAPI project scaffold."""
+from __future__ import annotations
+
 from typing import List
+
+from neutronapi.exceptions import CommandError
+from neutronapi.scaffold import format_scaffold_report, scaffold_project
 
 
 class Command:
     def __init__(self):
-        self.help = "Create a new NeutronAPI project (CLI only)"
+        self.help = "Create or repair a NeutronAPI project scaffold."
 
-    async def handle(self, args: List[str]) -> None:
-        if not args:
-            print("Usage: neutronapi startproject <project_name> [destination_dir]")
-            return
+    async def handle(self, args: List[str]) -> int:
+        if not args or any(arg in {"--help", "-h", "help"} for arg in args):
+            print("Usage: neutronapi startproject <project_name> [destination_dir] [--force]")
+            print(self.help)
+            return 0
 
-        project_name = args[0]
-        dest = args[1] if len(args) > 1 else project_name
+        force = False
+        positional: list[str] = []
+        for arg in args:
+            if arg == "--force":
+                force = True
+            else:
+                positional.append(arg)
 
-        if os.path.exists(dest) and os.listdir(dest):
-            print(f"Destination '{dest}' already exists and is not empty.")
-            return
+        if len(positional) not in {1, 2}:
+            raise CommandError("startproject expects a project name and an optional destination.")
 
-        # Create basic structure
-        os.makedirs(os.path.join(dest, 'apps'), exist_ok=True)
+        project_name = positional[0]
+        destination = positional[1] if len(positional) == 2 else project_name
 
-        # Create simple manage.py
-        manage_content = '''#!/usr/bin/env python
-"""
-Simple manage.py for NeutronAPI project.
-"""
-import os
-import sys
-
-def main():
-    # Set default settings module
-    os.environ.setdefault('NEUTRONAPI_SETTINGS_MODULE', 'apps.settings')
-
-    from neutronapi.cli import main as cli_main
-    cli_main()
-
-if __name__ == "__main__":
-    main()
-'''
-
-        manage_path = os.path.join(dest, 'manage.py')
-        with open(manage_path, 'w') as f:
-            f.write(manage_content)
-
-        try:
-            os.chmod(manage_path, 0o755)
-        except Exception:
-            pass
-
-        # Create apps/__init__.py
-        with open(os.path.join(dest, 'apps', '__init__.py'), 'w') as f:
-            f.write("# Apps package\n")
-
-        # Create comprehensive settings.py
-        settings_content = f'''"""
-Settings for {project_name}.
-
-For the full list of settings and their values, see:
-https://docs.neutronapi.com/en/latest/ref/settings/
-"""
-import os
-from pathlib import Path
-
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-# REQUIRED SETTINGS
-# -----------------
-
-# ASGI application entry point (REQUIRED)
-# Points to your Application instance in module:variable format
-ENTRY = "apps.entry:app"
-
-# Database configuration (REQUIRED)
-# At minimum, you must define a 'default' database
-DATABASES = {{
-    'default': {{
-        'ENGINE': 'aiosqlite',  # or 'asyncpg' for PostgreSQL
-        'NAME': ':memory:' if os.getenv('TESTING') == '1' else BASE_DIR / 'db.sqlite3',
-        # For PostgreSQL, also add:
-        # 'HOST': 'localhost',
-        # 'PORT': 5432,
-        # 'USER': 'your_user',
-        # 'PASSWORD': 'your_password',
-    }}
-}}
-
-# OPTIONAL SETTINGS
-# -----------------
-
-# Security settings
-SECRET_KEY = os.getenv('SECRET_KEY', 'dev-key-change-in-production')
-DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
-ALLOWED_HOSTS = ['localhost', '127.0.0.1']
-
-# Application settings
-USE_TZ = True
-TIME_ZONE = 'UTC'
-
-# Logging configuration
-LOGGING = {{
-    'version': 1,
-    'disable_existing_loggers': False,
-    'handlers': {{
-        'console': {{
-            'class': 'logging.StreamHandler',
-        }},
-    }},
-    'root': {{
-        'handlers': ['console'],
-        'level': 'INFO',
-    }},
-}}
-
-# Background task settings
-BACKGROUND_TASKS = {{
-    'enabled': True,
-    'max_workers': 4,
-}}
-'''
-
-        with open(os.path.join(dest, 'apps', 'settings.py'), 'w') as f:
-            f.write(settings_content)
-
-        # Create minimal entry.py
-        entry_content = f'''"""
-Entry point for {project_name}.
-"""
-from neutronapi.application import Application
-from neutronapi.base import API
-
-class MainAPI(API):
-    resource = ""  # Root path
-
-    @API.endpoint("/", methods=["GET"])
-    async def hello(self, scope, receive, send, **kwargs):
-        return await self.response({{"message": "Hello from {project_name}!"}})
-
-# Create the application with clean array syntax
-app = Application(apis=[
-    MainAPI(),
-])
-'''
-
-        with open(os.path.join(dest, 'apps', 'entry.py'), 'w') as f:
-            f.write(entry_content)
-
-        print(f"✓ Project '{project_name}' created at '{dest}'.")
+        result = scaffold_project(project_name, destination, force=force)
+        print(format_scaffold_report(f"Project '{project_name}'", result, force=force))
         print("Next steps:")
-        print(f"  cd {dest}")
+        print(f"  cd {result.destination}")
+        print("  python manage.py check")
+        print("  python manage.py start --no-reload")
         print("  python manage.py test")
+        return 0

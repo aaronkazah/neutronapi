@@ -747,10 +747,7 @@ Examples:
             except (asyncio.TimeoutError, Exception):
                 pass
 
-            # Exit behavior
-            if os.getenv('NEUTRONAPI_TEST_RETURN', '0') == '1':
-                return exit_code
-            os._exit(exit_code)
+            return exit_code
 
 
 def tag(*tags):

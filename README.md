@@ -6,24 +6,47 @@ NeutronAPI provides everything you need to build robust APIs quickly: universal 
 
 ## Installation
 
+NeutronAPI now follows the same high-level workflow as Django’s documented `django-admin` / `manage.py` split:
+
+- [Django admin/manage.py reference](https://docs.djangoproject.com/en/6.0/ref/django-admin/)
+- [Django tutorial bootstrap flow](https://docs.djangoproject.com/en/6.0/intro/tutorial01/)
+
+### Package User Flow
+
 ```bash
 pip install neutronapi
+python -m neutronapi --help
+```
+
+### Framework Developer Flow
+
+```bash
+python3.12 -m venv venv
+source venv/bin/activate
+python -m pip install -e .
+python -m neutronapi --help
 ```
 
 ## Quick Start
 
 ```bash
-# 1. Create project
+# 1. Create a project
 neutronapi startproject blog
 cd blog
 
-# 2. Create an app
+# 2. Validate the scaffold
+python manage.py check
+
+# 3. Start the server
+python manage.py start --no-reload
+
+# 4. Create an app scaffold
 python manage.py startapp posts
 
-# 3. Start server  
-python manage.py start               # Dev mode (auto-reload)
+# 5. Wire apps.posts.api into apps/entry.py, then re-run checks
+python manage.py check
 
-# 4. Test
+# 6. Run tests
 python manage.py test
 ```
 
@@ -33,93 +56,77 @@ python manage.py test
 ```bash
 neutronapi startproject blog
 cd blog
+python manage.py check
 ```
 
-**2. Create App Module**  
+**2. Start the generated app immediately**
+```bash
+python manage.py start --no-reload
+# Visit: http://127.0.0.1:8000/
+```
+
+**3. Create App Module**
 ```bash
 python manage.py startapp posts
 ```
 
-**3. Configure in `apps/settings.py`**
+`startapp` creates the app scaffold under `apps/posts`, but it does not silently rewrite `apps/entry.py`. That wiring stays explicit, and `python manage.py check` will warn until you register the new API.
+
+**4. Generated `apps/settings.py`**
 ```python
 import os
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ASGI application entry point (required for server)
 ENTRY = "apps.entry:app"  # module:variable format
 
 # Database
 DATABASES = {
-    'default': {
-        'ENGINE': 'aiosqlite',
-        'NAME': 'db.sqlite3',
+    "default": {
+        "ENGINE": "aiosqlite",
+        "NAME": ":memory:" if os.getenv("TESTING") == "1" else BASE_DIR / "db.sqlite3",
     }
 }
 ```
 
-**4. Create API in `apps/posts/api.py`**
+**5. Generated `apps/posts/api.py`**
 ```python
-from neutronapi.base import API, endpoint
+from neutronapi.base import API
 
 class PostAPI(API):
     resource = "/posts"
     name = "posts"
-    
-    @endpoint("/", methods=["GET"])
+
+    @API.endpoint("/", methods=["GET"], name="list")
     async def list_posts(self, scope, receive, send, **kwargs):
-        # Access registry dependencies
-        logger = self.registry.get('utils:logger')
-        cache = self.registry.get('services:cache')
-        
-        posts = [{"id": 1, "title": "Hello World"}]
-        return await self.response(posts)
-    
-    @endpoint("/", methods=["POST"])
-    async def create_post(self, scope, receive, send, **kwargs):
-        # JSON parser is the default; access body via kwargs
-        data = kwargs["body"]  # dict
-        return await self.response({"id": 2, "title": data.get("title", "New Post")})
+        return await self.response([])
 ```
 
-**5. Register API, Middlewares, Dependencies in `apps/entry.py`**
+**6. Register the new API in `apps/entry.py`**
 ```python
 from neutronapi.application import Application
 from neutronapi.middleware.compression import CompressionMiddleware
 from neutronapi.middleware.allowed_hosts import AllowedHostsMiddleware
 from apps.posts.api import PostAPI
 
-# Example dependencies
-class Logger:
-    def info(self, message: str) -> None:
-        print(f"[INFO] {message}")
-
-class CacheService:
-    def __init__(self):
-        self._cache = {}
-    
-    def get(self, key: str) -> any:
-        return self._cache.get(key)
-    
-    def set(self, key: str, value: any) -> None:
-        self._cache[key] = value
-
-# Modern registry-based dependency injection
 app = Application(
-    apis=[PostAPI()],
+    apis=[
+        PostAPI(),
+    ],
     middlewares=[
         AllowedHostsMiddleware(allowed_hosts=["localhost", "127.0.0.1"]),
         CompressionMiddleware(minimum_size=512),
     ],
-    registry={
-        'utils:logger': Logger(),
-        'services:cache': CacheService(),
-        'services:email': EmailService(),
-    }
 )
 ```
 
-**6. Start Server**
+**7. Re-run checks and tests**
 ```bash
-python manage.py start
+python manage.py check
+python manage.py test
+python manage.py start --no-reload
 # Visit: http://127.0.0.1:8000/posts
 ```
 

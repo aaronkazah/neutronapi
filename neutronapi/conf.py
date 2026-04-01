@@ -1,15 +1,45 @@
-"""
-Settings configuration for NeutronAPI.
-"""
+"""Settings configuration for NeutronAPI."""
+from __future__ import annotations
+
+import importlib
 import os
 import sys
-import importlib
 from typing import Any, Optional
 
+from neutronapi.exceptions import ImproperlyConfigured
 
-class ImproperlyConfigured(Exception):
-    """Raised when NeutronAPI is somehow improperly configured."""
-    pass
+
+DEFAULT_SETTINGS_MODULE = "apps.settings"
+
+
+def is_neutronapi_development(cwd: Optional[str] = None) -> bool:
+    """Check if we're in the NeutronAPI source repository."""
+    cwd = cwd or os.getcwd()
+    neutronapi_pkg = os.path.join(cwd, "neutronapi")
+    pyproject_toml = os.path.join(cwd, "pyproject.toml")
+    setup_py = os.path.join(cwd, "setup.py")
+    neutronapi_tests = os.path.join(cwd, "neutronapi", "tests")
+    return (
+        os.path.isdir(neutronapi_pkg)
+        and (os.path.isfile(setup_py) or os.path.isfile(pyproject_toml))
+        and os.path.isdir(neutronapi_tests)
+    )
+
+
+def _settings_module_name() -> str:
+    return os.environ.get("NEUTRONAPI_SETTINGS_MODULE", DEFAULT_SETTINGS_MODULE)
+
+
+def _clear_module_cache(module_name: str) -> None:
+    importlib.invalidate_caches()
+    parents = []
+    parts = module_name.split(".")
+    while parts:
+        parents.append(".".join(parts))
+        parts.pop()
+
+    for name in parents:
+        sys.modules.pop(name, None)
 
 
 class Settings:
@@ -29,25 +59,24 @@ class Settings:
     def _setup(self):
         """Setup settings by loading the specified settings module."""
         settings_module = os.environ.get(
-            'NEUTRONAPI_SETTINGS_MODULE',
-            'apps.settings'
+            "NEUTRONAPI_SETTINGS_MODULE",
+            DEFAULT_SETTINGS_MODULE,
         )
 
         try:
-            # Add current working directory to Python path
             cwd = os.getcwd()
             if cwd not in sys.path:
                 sys.path.insert(0, cwd)
 
+            _clear_module_cache(settings_module)
             self._settings_module = importlib.import_module(settings_module)
             self._settings = {
                 name: getattr(self._settings_module, name)
                 for name in dir(self._settings_module)
-                if not name.startswith('_')
+                if not name.startswith("_")
             }
         except ImportError as e:
-            # Only provide default settings if we're developing/testing NeutronAPI itself
-            if settings_module == 'apps.settings' and self._is_neutronapi_development():
+            if settings_module == DEFAULT_SETTINGS_MODULE and is_neutronapi_development():
                 print("No settings module found. Using default test configuration for NeutronAPI core library.")
                 self._use_default_test_settings()
             else:
@@ -57,59 +86,30 @@ class Settings:
                     f"You can also set NEUTRONAPI_SETTINGS_MODULE environment variable. "
                     f"Error: {e}"
                 )
-
-        # Validate required settings
         self._validate_required_settings()
-
-    def _is_neutronapi_development(self):
-        """Check if we're in the NeutronAPI development/source directory."""
-        cwd = os.getcwd()
-        
-        # Check if we're in the NeutronAPI source repository
-        # Look for neutronapi package directory and setup.py/pyproject.toml
-        neutronapi_pkg = os.path.join(cwd, 'neutronapi')
-        setup_py = os.path.join(cwd, 'setup.py')
-        pyproject_toml = os.path.join(cwd, 'pyproject.toml')
-        
-        is_source_dir = (
-            os.path.isdir(neutronapi_pkg) and 
-            (os.path.isfile(setup_py) or os.path.isfile(pyproject_toml))
-        )
-        
-        # Also check if we can find neutronapi's own tests directory
-        neutronapi_tests = os.path.join(cwd, 'neutronapi', 'tests')
-        has_neutron_tests = os.path.isdir(neutronapi_tests)
-        
-        return is_source_dir and has_neutron_tests
 
     def _use_default_test_settings(self):
         """Use default test settings for NeutronAPI core library testing."""
-        import os
-        
-        # Determine database engine from environment
-        engine = 'aiosqlite'  # Default to SQLite
+        engine = "aiosqlite"
         db_config = {
-            'ENGINE': 'aiosqlite',
-            'NAME': ':memory:',
+            "ENGINE": "aiosqlite",
+            "NAME": ":memory:",
         }
-        
-        # Check if PostgreSQL is requested
-        if os.getenv('DATABASE_PROVIDER', '').lower() == 'asyncpg':
-            engine = 'asyncpg'
+
+        if os.getenv("DATABASE_PROVIDER", "").lower() == "asyncpg":
+            engine = "asyncpg"
             db_config = {
-                'ENGINE': 'asyncpg',
-                'HOST': '127.0.0.1',
-                'PORT': 5432,
-                'NAME': 'neutronapi_test',
-                'USER': 'postgres',
-                'PASSWORD': 'postgres',
+                "ENGINE": "asyncpg",
+                "HOST": "127.0.0.1",
+                "PORT": 5432,
+                "NAME": "neutronapi_test",
+                "USER": "postgres",
+                "PASSWORD": "postgres",
             }
-        
+
         self._settings = {
-            'ENTRY': 'neutronapi.tests.entry:app',  # Dummy entry for tests
-            'DATABASES': {
-                'default': db_config
-            }
+            "ENTRY": "neutronapi.tests.entry:app",
+            "DATABASES": {"default": db_config},
         }
         print(f"Using default test configuration with {engine}")
 
@@ -148,19 +148,50 @@ class Settings:
                 )
 
     def __getattr__(self, name: str) -> Any:
-        """Get a setting value."""
         if self._settings is None:
             self._setup()
-
         if name in self._settings:
             return self._settings[name]
-
         raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
     def get(self, name: str, default: Any = None) -> Any:
-        """Get a setting value with a default fallback."""
         try:
             return getattr(self, name)
+        except AttributeError:
+            return default
+
+
+class LazySettings:
+    """Lazily load project settings and reload when the cwd changes."""
+
+    def __init__(self) -> None:
+        self._wrapped: Optional[Settings] = None
+        self._signature: Optional[tuple[str, str]] = None
+
+    def _current_signature(self) -> tuple[str, str]:
+        return (os.getcwd(), _settings_module_name())
+
+    def _setup(self, *, force: bool = False) -> Settings:
+        signature = self._current_signature()
+        if force or self._wrapped is None or self._signature != signature:
+            self._wrapped = Settings()
+            self._signature = signature
+        return self._wrapped
+
+    def reset(self) -> None:
+        self._wrapped = None
+        self._signature = None
+
+    @property
+    def configured(self) -> bool:
+        return self._wrapped is not None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._setup(), name)
+
+    def get(self, name: str, default: Any = None) -> Any:
+        try:
+            return getattr(self._setup(), name)
         except AttributeError:
             return default
 
@@ -174,24 +205,23 @@ def get_app_from_entry(entry_point: Optional[str] = None):
                     (e.g., "apps.entry:app"). If None, uses settings.ENTRY
     """
     if entry_point is None:
-        # Use settings to get the entry point
         settings = Settings()
-        entry_point = getattr(settings, 'ENTRY', 'apps.entry:app')
+        entry_point = getattr(settings, "ENTRY", "apps.entry:app")
 
-    if ':' not in entry_point:
+    if ":" not in entry_point:
         raise ValueError(
             f"Invalid entry point format '{entry_point}'. "
             f"Expected format: 'module:variable' (e.g., 'apps.entry:app')"
         )
 
-    module_path, app_name = entry_point.split(':', 1)
+    module_path, app_name = entry_point.split(":", 1)
 
     try:
-        # Add current working directory to Python path
         cwd = os.getcwd()
         if cwd not in sys.path:
             sys.path.insert(0, cwd)
 
+        _clear_module_cache(module_path)
         module = importlib.import_module(module_path)
         app = getattr(module, app_name)
         return app
@@ -206,6 +236,4 @@ def get_app_from_entry(entry_point: Optional[str] = None):
             f"Make sure '{app_name}' is defined in {module_path}. Error: {e}"
         )
 
-
-# Global settings instance
-settings = Settings()
+settings = LazySettings()
