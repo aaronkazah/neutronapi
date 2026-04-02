@@ -4,7 +4,7 @@ from decimal import Decimal
 from enum import Enum
 import json
 
-from neutronapi.encoders import CustomJSONEncoder
+from neutronapi.encoders import CustomJSONEncoder, json_dumps_bytes, json_loads
 
 
 class E(Enum):
@@ -31,3 +31,10 @@ class TestEncoders(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"19.99"', s)
         self.assertIn('"0.123456789012345"', s)
 
+    async def test_orjson_helpers_round_trip(self):
+        data = {"value": Decimal("10.25"), "enum": E.A}
+
+        payload = json_dumps_bytes(data)
+        loaded = json_loads(payload)
+
+        self.assertEqual(loaded, {"value": "10.25", "enum": "a"})

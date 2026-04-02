@@ -348,23 +348,26 @@ class QuerySet(Generic[T]):
         if not self._order_by:
             # Default to model primary key when available; else 'id'
             order_field = None
-            if self.model is not None and hasattr(self.model, '_fields'):
-                try:
-                    pk_fields = [name for name, f in self.model._neutronapi_fields_.items() if getattr(f, 'primary_key', False)]
-                    if len(pk_fields) == 1:
-                        order_field = pk_fields[0]
-                except Exception:
-                    pass
+            if self.model is not None:
+                pk_fields = [
+                    name
+                    for name, field in self.model._neutronapi_fields_.items()
+                    if getattr(field, "primary_key", False)
+                ]
+                if len(pk_fields) == 1:
+                    order_field = pk_fields[0]
             if not order_field:
                 order_field = 'id'
             qs = self.order_by(f'-{order_field}').limit(1)
         else:
             reversed_order = []
             for order in self._order_by:
-                if order.endswith(' DESC'):
-                    reversed_order.append(order.replace(' DESC', ' ASC'))
-                else:
-                    reversed_order.append(order.replace(' ASC', ' DESC'))
+                reversed_order.append(
+                    {
+                        "field": order["field"],
+                        "direction": "ASC" if order["direction"] == "DESC" else "DESC",
+                    }
+                )
             qs = self._clone()
             qs._order_by = reversed_order
             qs = qs.limit(1)
@@ -997,7 +1000,11 @@ class QuerySet(Generic[T]):
 
         # Return a Model instance instead of opinionated Object
         instance = self.model(**result_dict)
-        instance.pk = instance.id  # Set pk to indicate this came from database
+        pk_fields = [
+            name for name, field in self.model._neutronapi_fields_.items()
+            if getattr(field, 'primary_key', False)
+        ]
+        instance.pk = getattr(instance, pk_fields[0], None) if len(pk_fields) == 1 else None
         return instance
 
 

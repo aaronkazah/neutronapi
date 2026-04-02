@@ -2,6 +2,8 @@
 
 **A modern, high-performance Python web framework built for async applications.**
 
+Source: [github.com/aaronkazah/neutronapi](https://github.com/aaronkazah/neutronapi)
+
 NeutronAPI provides everything you need to build robust APIs quickly: universal dependency injection, comprehensive type support, database models with migrations, background tasks, and an intuitive command-line interface. Designed for performance, developer experience, and production readiness.
 
 ## Installation

@@ -1,7 +1,7 @@
 import unittest
 
 from neutronapi.base import API
-from neutronapi.application import Application, create_application
+from neutronapi.application import Application
 
 
 class PingAPI(API):
@@ -47,13 +47,6 @@ class TestAPIAndApplication(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(messages[0]["type"], "http.response.start")
         self.assertEqual(messages[0]["status"], 200)
         self.assertEqual(messages[1]["type"], "http.response.body")
-
-    async def test_create_application_wrapper(self):
-        app = create_application({"ping": PingAPI()})
-        scope = {"type": "http", "method": "GET", "path": "/ping", "headers": []}
-        messages = await call_asgi(app, scope)
-        self.assertEqual(messages[0]["status"], 200)
-
 
 class MockUtil:
     def __init__(self, util_id):
@@ -156,4 +149,3 @@ class TestApplicationRegistry(unittest.IsolatedAsyncioTestCase):
         
         # API should get updated registry
         self.assertIn('utils:cache', api.registry)
-

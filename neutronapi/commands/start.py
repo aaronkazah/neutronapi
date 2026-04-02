@@ -80,9 +80,9 @@ For all options: python manage.py start --help"""
                 
                 # Setup databases with settings configuration (same as migrate command)
                 try:
-                    from apps.settings import DATABASES
+                    from neutronapi.conf import settings
                     from neutronapi.db import setup_databases
-                    setup_databases(DATABASES)
+                    setup_databases(settings.DATABASES)
                 except Exception:
                     # If settings import fails, use default configuration
                     pass
@@ -111,7 +111,7 @@ For all options: python manage.py start --help"""
         # Get the entry point string from settings
         try:
             from neutronapi.conf import settings
-            entry_point = getattr(settings, 'ENTRY', 'apps.entry:app')
+            entry_point = settings.ENTRY
         except (ImportError, AttributeError) as e:
             raise CommandError(
                 "Could not load settings. Make sure apps/settings.py exists and defines "

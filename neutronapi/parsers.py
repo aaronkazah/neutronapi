@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from io import BytesIO
 from typing import Dict, List, Optional, Any
+
+from multipart import parse_form
+
+from neutronapi.encoders import json_loads
 
 
 class BaseParser:
@@ -58,9 +63,8 @@ class JSONParser(BaseParser):
         Raises:
             ValidationError: If JSON is malformed
         """
-        import json
         try:
-            data = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+            data = json_loads(raw_body) if raw_body else {}
         except Exception:
             from neutronapi.api import exceptions
             raise exceptions.ValidationError("Invalid JSON body")
@@ -85,36 +89,86 @@ class FormParser(BaseParser):
 class MultiPartParser(BaseParser):
     media_types = ["multipart/form-data"]
 
-    async def parse(self, scope, receive, *, raw_body: bytes, headers: Dict[bytes, bytes]) -> Dict:
-        # Minimal multipart parsing via cgi
-        import cgi
-        from io import BytesIO
-        environ = {
-            "REQUEST_METHOD": scope.get("method", "POST"),
-            "CONTENT_TYPE": (headers.get(b"content-type") or b"").decode("utf-8"),
-            "CONTENT_LENGTH": str(len(raw_body)),
-        }
-        fp = BytesIO(raw_body)
-        try:
-            form = cgi.FieldStorage(fp=fp, environ=environ, keep_blank_values=True)
-        except Exception:
-            from neutronapi.api import exceptions
-            raise exceptions.ValidationError("Invalid multipart form data")
+    @staticmethod
+    def _extract_boundary(headers: Dict[bytes, bytes]) -> Optional[bytes]:
+        content_type = headers.get(b"content-type", b"")
+        for part in content_type.split(b";")[1:]:
+            name, _, value = part.strip().partition(b"=")
+            if name.lower() != b"boundary":
+                continue
+            return value.strip().strip(b'"') or None
+        return None
 
+    @staticmethod
+    def _extract_first_file_content_type(raw_body: bytes, boundary: bytes | None) -> Optional[str]:
+        if not raw_body or not boundary:
+            return None
+
+        delimiter = b"--" + boundary
+        for segment in raw_body.split(delimiter):
+            part = segment.strip()
+            if not part or part == b"--":
+                continue
+
+            header_block, separator, _ = part.partition(b"\r\n\r\n")
+            if not separator:
+                continue
+
+            headers_by_name: Dict[bytes, bytes] = {}
+            for header_line in header_block.split(b"\r\n"):
+                name, _, value = header_line.partition(b":")
+                if not value:
+                    continue
+                headers_by_name[name.strip().lower()] = value.strip()
+
+            disposition = headers_by_name.get(b"content-disposition", b"")
+            if b"filename=" not in disposition.lower():
+                continue
+
+            content_type = headers_by_name.get(b"content-type")
+            if content_type:
+                return content_type.decode("utf-8", "ignore")
+            return None
+
+        return None
+
+    async def parse(self, scope, receive, *, raw_body: bytes, headers: Dict[bytes, bytes]) -> Dict:
         data: Dict[str, object] = {}
         file_bytes: Optional[bytes] = None
         filename: Optional[str] = None
         file_content_type: Optional[str] = None
 
-        for key in form.keys():
-            item = form[key]
-            if getattr(item, "filename", None):
-                if file_bytes is None:  # capture first file for convenience
-                    file_bytes = item.file.read()
-                    filename = item.filename
-                    file_content_type = getattr(item, "type", None)
-            else:
-                data[key] = item.value
+        def on_field(field) -> None:
+            key = (field.field_name or b"").decode("utf-8")
+            value = field.value or b""
+            data[key] = value.decode("utf-8")
+
+        def on_file(file) -> None:
+            nonlocal file_bytes, filename
+            if file_bytes is not None:
+                return
+            filename = (file.file_name or b"").decode("utf-8") or None
+            file.file_object.seek(0)
+            file_bytes = file.file_object.read()
+
+        try:
+            parse_form(
+                {
+                    "Content-Type": headers.get(b"content-type", b""),
+                    "Content-Length": str(len(raw_body)).encode("utf-8"),
+                },
+                BytesIO(raw_body),
+                on_field,
+                on_file,
+            )
+        except Exception:
+            from neutronapi.api import exceptions
+            raise exceptions.ValidationError("Invalid multipart form data")
+
+        file_content_type = self._extract_first_file_content_type(
+            raw_body,
+            self._extract_boundary(headers),
+        )
 
         out = {"body": data}
         if file_bytes is not None:
@@ -153,8 +207,7 @@ class BinaryParser(BaseParser):
         ctype = (headers.get(b"content-type") or b"").split(b";", 1)[0].strip().lower()
         if ctype == b"application/json" and raw_body:
             try:
-                import json
-                parsed = json.loads(raw_body.decode("utf-8"))
+                parsed = json_loads(raw_body)
                 result["body"] = parsed
             except Exception:
                 result["body"] = raw_body  # Fallback to raw if JSON parsing fails

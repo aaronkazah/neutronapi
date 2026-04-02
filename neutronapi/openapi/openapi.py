@@ -1,9 +1,8 @@
 """
 OpenAPI specification generator for the API framework.
 
-This module provides functionality to automatically generate OpenAPI 3.0 specifications
-from API instances and create_application configurations, similar to how Stripe API
-provides comprehensive documentation.
+This module provides functionality to automatically generate OpenAPI 3.0
+specifications from API instances and Application configurations.
 """
 
 import json
@@ -23,8 +22,8 @@ class OpenAPIGenerator:
 
     Supports automatic generation from:
     - Individual API instances
-    - Router with multiple APIs  
-    - Full application created with create_application()
+    - Router with multiple APIs
+    - Full Application instances
     
     Discovery Options:
     - include_all: Include ALL endpoints including hidden APIs and private endpoints (default: False)
@@ -103,7 +102,7 @@ class OpenAPIGenerator:
 
     async def generate_from_application(self, app: RoutingMiddleware) -> Dict[str, Any]:
         """
-        Generate OpenAPI spec from a complete application created with create_application().
+        Generate OpenAPI spec from a complete application.
 
         Args:
             app: Thalamus application instance
@@ -790,10 +789,10 @@ async def generate_openapi_from_application(
     **kwargs,
 ) -> Dict[str, Any]:
     """
-    Convenience function to generate OpenAPI spec from a create_application() result.
+    Convenience function to generate OpenAPI spec from an Application instance.
 
     Args:
-        app: Application created with create_application()
+        app: Application created with neutronapi.application.Application
         title: API title
         description: API description
         version: API version (overrides router's version)

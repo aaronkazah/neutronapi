@@ -1,6 +1,7 @@
 import unittest
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 from neutronapi.base import API
 from neutronapi.application import Application
@@ -279,3 +280,23 @@ class TestBackgroundIntegration(unittest.IsolatedAsyncioTestCase):
             await fn()
 
         self.assertFalse(app.background.running)
+
+    async def test_weekly_schedule_uses_current_weekday(self):
+        from neutronapi.background import Background
+
+        monday_afternoon = datetime(2026, 4, 6, 15, 30, tzinfo=timezone.utc)
+        with patch("neutronapi.background.datetime") as mocked_datetime:
+            mocked_datetime.now.return_value = monday_afternoon
+            background = Background()
+            next_run = background._calculate_next_run(TaskFrequency.WEEKLY)
+
+        self.assertEqual(next_run, datetime(2026, 4, 6, 0, 0, tzinfo=timezone.utc))
+
+    async def test_poll_interval_is_configurable(self):
+        from neutronapi.background import Background
+
+        background = Background(poll_interval=0.5)
+        self.assertEqual(background.poll_interval, 0.5)
+
+        with self.assertRaises(ValueError):
+            Background(poll_interval=0)

@@ -35,12 +35,6 @@ class Command:
             # Import here to avoid import-time project requirements
             from neutronapi.db.migrations import MigrationManager
 
-            # Load optional project DB settings (not strictly needed for makemigrations)
-            try:
-                from apps.settings import DATABASES  # noqa: F401
-            except Exception:
-                DATABASES = None  # noqa: F841
-
             manager = MigrationManager(base_dir="apps")
             app_labels = [args[0]] if args else manager.apps
 

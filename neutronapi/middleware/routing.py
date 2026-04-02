@@ -74,23 +74,7 @@ class RoutingMiddleware:
                     logger.error(traceback.format_exc())
                     raise
         else:
-            # Try to import tasks module silently
-            try:
-                from apps.tasks import initialize_tasks
-
-                logger.debug("Found tasks module, initializing")
-                await initialize_tasks()
-                logger.debug("Tasks initialization completed")
-            except ImportError:
-                # No tasks module - this is fine, just continue silently
-                logger.debug(
-                    "No tasks module found - continuing without background tasks"
-                )
-            except Exception as e:
-                logger.error(f"Error initializing tasks: {e}")
-                import traceback
-
-                logger.error(traceback.format_exc())
+            logger.debug("No startup handlers registered")
 
     async def _run_shutdown_handlers(self):
         """Run all registered shutdown handlers."""

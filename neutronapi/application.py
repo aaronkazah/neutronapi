@@ -1,19 +1,20 @@
-from typing import Dict, Optional, Callable, List, Any, Union, Protocol, TypeVar, Generic, TYPE_CHECKING
-import warnings
+import logging
 import re
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar, Union
 
 if TYPE_CHECKING:
     from neutronapi.base import API
 
 
 T = TypeVar('T')
-RegistryValue = TypeVar('RegistryValue')
 
 from neutronapi.base import API, Response
 from neutronapi.api import exceptions
 from neutronapi.middleware.cors import CorsMiddleware
 from neutronapi.middleware.routing import RoutingMiddleware
 from neutronapi.middleware.allowed_hosts import AllowedHostsMiddleware
+
+logger = logging.getLogger(__name__)
 
 
 class Application:
@@ -37,8 +38,7 @@ class Application:
             async def list_users(self, scope, receive, send, **kwargs):
                 return await self.response({"users": []})
 
-        # Clean array-based syntax - no redundancy!
-        # Middlewares and services are instances only.
+        # Clean array-based syntax - no redundancy.
         from neutronapi.middleware.compression import CompressionMiddleware
         from neutronapi.middleware.allowed_hosts import AllowedHostsMiddleware
 
@@ -51,9 +51,10 @@ class Application:
                 AllowedHostsMiddleware(allowed_hosts=["example.com", "*.example.com"]),
                 CompressionMiddleware(minimum_size=512),
             ],
-            services=[
-                # Example: 'services:event_bus': EventBus(), 'services:email': EmailService()
-            ],
+            registry={
+                "services:event_bus": EventBus(),
+                "services:email": EmailService(),
+            },
         )
     """
 
@@ -113,9 +114,7 @@ class Application:
             if isinstance(apis, dict):
                 # Use the provided names from the dict
                 for name, api in apis.items():
-                    if not hasattr(api, 'resource'):
-                        raise ValueError(f"API {api.__class__.__name__} must have a 'resource' attribute")
-                    resource = getattr(api, 'resource', None)
+                    resource = api.resource
                     if resource is None:
                         raise ValueError(f"API {api.__class__.__name__} must define a non-null 'resource'")
                     self.apis[name] = api
@@ -123,14 +122,12 @@ class Application:
             else:
                 # For list[API], use the API name as the key for reverse lookups
                 for api in apis:
-                    if not hasattr(api, 'resource'):
-                        raise ValueError(f"API {api.__class__.__name__} must have a 'resource' attribute")
-                    resource = getattr(api, 'resource', None)
+                    resource = api.resource
                     if resource is None:
                         raise ValueError(f"API {api.__class__.__name__} must define a non-null 'resource'")
                     
                     # Require explicit 'name' attribute for reverse lookups
-                    if not hasattr(api, 'name') or not api.name:
+                    if not api.name:
                         raise ValueError(f"API {api.__class__.__name__} must have a 'name' attribute for reverse lookups")
                     
                     self.apis[api.name] = api
@@ -180,7 +177,7 @@ class Application:
 
             elif scope["type"] == "websocket":
                 path = scope.get("path", "/")
-                print(f"[WS-ROUTE] Routing websocket: path={path}")
+                logger.debug("Routing websocket for path=%s", path)
 
                 # Check if path matches any API exactly
                 if path in self._resource_apis:
@@ -191,12 +188,12 @@ class Application:
                 # Check if path starts with any API prefix
                 for api_path, api in self._resource_apis.items():
                     if path.startswith(api_path):
-                        print(f"[WS-ROUTE] Matched API: api_path={api_path}")
+                        logger.debug("Matched websocket API prefix=%s", api_path)
                         await api.handle(scope, receive, send)
                         return
 
                 # No matching API for websocket - close connection
-                print(f"[WS-ROUTE] No match! Available APIs: {list(self._resource_apis.keys())}")
+                logger.debug("No websocket API match for path=%s", path)
                 await send({"type": "websocket.close", "code": 4004})
 
         # Set lifecycle hooks on app function so RoutingMiddleware can find them
@@ -215,23 +212,12 @@ class Application:
             composed = base_router
             # Middlewares are declared outermost-first; apply in reverse to wrap
             for mw in reversed(middlewares):
-                # Late-bind the inner app
-                if hasattr(mw, 'app'):
-                    mw.app = composed
-                if hasattr(mw, 'router'):
-                    mw.router = composed
-                # Provide shared registry if middleware wants it
-                if hasattr(mw, 'set_registry') and callable(getattr(mw, 'set_registry')):
-                    mw.set_registry(self.registry)
-                elif hasattr(mw, 'registry'):
-                    try:
-                        setattr(mw, 'registry', self.registry)
-                    except Exception:
-                        pass
+                # Middleware instances are expected to support late-bound app/registry.
+                mw.app = composed
+                mw.registry = self.registry
                 composed = mw
             self.app = composed
         else:
-            # Legacy minimal wrapping
             hosts_app = AllowedHostsMiddleware(base_router,
                                                allowed_hosts=allowed_hosts) if allowed_hosts else base_router
             self.app = CorsMiddleware(hosts_app, allow_all_origins=cors_allow_all)
@@ -433,31 +419,3 @@ class Application:
 
     async def __call__(self, scope, receive, send, **kwargs):
         return await self.app(scope, receive, send, **kwargs)
-
-
-def create_application(
-    apis: Union[Dict[str, API], List[API]],
-    static_hosts: Optional[List[str]] = None,
-    static_resolver: Optional[Callable] = None,
-    allowed_hosts: Optional[List[str]] = None,
-    version: str = "1.0.0",
-    expose_docs: bool = False,  # kept for compatibility; no-op
-):
-    """Deprecated compatibility wrapper for creating an Application.
-
-    Deprecated in 0.1.3: use Application(apis=[...]) or Application(apis={...}) directly.
-    Docs are not injected automatically; pass your own docs API if desired.
-    """
-    warnings.warn(
-        "create_application is deprecated as of 0.1.3; "
-        "construct Application directly with list or dict of APIs.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return Application(
-        apis=apis,
-        version=version,
-        allowed_hosts=allowed_hosts,
-        static_hosts=static_hosts,
-        static_resolver=static_resolver,
-    )

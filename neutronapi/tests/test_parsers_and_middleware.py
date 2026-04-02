@@ -234,6 +234,50 @@ class TestParsersAndMiddleware(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out["filename"], "test.txt")
         self.assertEqual(out["file_type"], "text/plain")
 
+    async def test_multipart_parser_without_file_content_type(self):
+        from neutronapi.parsers import MultiPartParser
+
+        class UpAPI(API):
+            name = "up"
+            resource = ""
+
+            @API.endpoint("/upload", methods=["POST"], parsers=[MultiPartParser()])
+            async def upload(self, scope, receive, send, **kwargs):
+                return await self.response(
+                    {
+                        "fields": kwargs["body"],
+                        "filename": kwargs.get("filename"),
+                        "file_type": kwargs.get("file_content_type"),
+                    }
+                )
+
+        app = Application(apis=[UpAPI()])
+
+        boundary = "------------------------d74496d66958873e"
+        parts = []
+        parts.append(
+            f"--{boundary}\r\n"
+            "Content-Disposition: form-data; name=\"field1\"\r\n\r\n"
+            "value1\r\n"
+        )
+        parts.append(
+            f"--{boundary}\r\n"
+            "Content-Disposition: form-data; name=\"file\"; filename=\"test.txt\"\r\n\r\n"
+            "hello world\r\n"
+        )
+        parts.append(f"--{boundary}--\r\n")
+        body = "".join(parts).encode("utf-8")
+        headers = [
+            (b"content-type", f"multipart/form-data; boundary={boundary}".encode("utf-8")),
+        ]
+        scope = {"type": "http", "method": "POST", "path": "/upload", "headers": headers}
+        msgs = await call_asgi(app, scope, body=body)
+        self.assertEqual(msgs[0]["status"], 200)
+        out = json.loads(msgs[1]["body"].decode())
+        self.assertEqual(out["fields"], {"field1": "value1"})
+        self.assertEqual(out["filename"], "test.txt")
+        self.assertIsNone(out["file_type"])
+
     async def test_compression_gzip_and_skip(self):
         # Create large JSON to trigger compression
         class BigAPI(API):

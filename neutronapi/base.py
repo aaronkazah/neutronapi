@@ -1,5 +1,5 @@
 # core/api.py
-import json
+import logging
 import re
 from dataclasses import dataclass
 from functools import wraps
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 from urllib.parse import parse_qs
 
 from neutronapi.api import exceptions
-from neutronapi.encoders import CustomJSONEncoder
+from neutronapi.encoders import json_dumps_bytes, json_dumps_text, json_loads
 from neutronapi.db.models import Model
 
 T = TypeVar("T", bound="Model")
@@ -35,6 +35,8 @@ RequestHandler = Callable[..., Any]
 Scope = Dict[str, Any]
 Receive = Callable[[], Any]
 Send = Callable[[Dict[str, Any]], None]
+
+logger = logging.getLogger(__name__)
 
 
 class Response:
@@ -96,14 +98,11 @@ class Response:
             if self.media_type == "application/json" and isinstance(
                 self.body, (dict, list)
             ):
-                body_bytes = json.dumps(
+                body_bytes = json_dumps_bytes(
                     self.body,
-                    cls=CustomJSONEncoder,
                     indent=self.indent,
                     sort_keys=True,
-                    ensure_ascii=False,
-                    separators=(",", ": "),
-                ).encode("utf-8")
+                )
             elif isinstance(self.body, str):
                 body_bytes = self.body.encode("utf-8")
             elif isinstance(self.body, bytes):
@@ -473,7 +472,7 @@ class API:
         await send(
             {
                 "type": "websocket.send",
-                "text": json.dumps(payload, cls=CustomJSONEncoder),
+                "text": json_dumps_text(payload),
             }
         )
 
@@ -483,8 +482,8 @@ class API:
             return None
 
         try:
-            return json.loads(message["text"])
-        except json.JSONDecodeError:
+            return json_loads(message["text"])
+        except ValueError:
             return None
 
     async def ws_error(self, send: Send, message: str) -> None:
@@ -839,35 +838,6 @@ class API:
 
         await handler(scope, receive, send, **kwargs)
 
-    async def _parse_multipart(self, body: bytes, content_type: str) -> Dict:
-        """Parse multipart form data."""
-        try:
-            import cgi
-            from io import BytesIO
-
-            environ = {
-                "REQUEST_METHOD": "POST",
-                "CONTENT_TYPE": content_type,
-                "CONTENT_LENGTH": str(len(body)),
-            }
-
-            fp = BytesIO(body)
-            fields = {}
-            files = {}
-
-            form = cgi.FieldStorage(fp=fp, environ=environ, keep_blank_values=True)
-
-            for key in form.keys():
-                item = form[key]
-                if item.filename:
-                    files[key] = item.file.read()
-                else:
-                    fields[key] = item.value
-
-            return {"fields": fields, "files": files}
-        except Exception as e:
-            raise exceptions.ValidationError(f"Invalid multipart form data: {str(e)}")
-
     async def match(self, path: str, method: str = "GET"):
         """Matches a request path and method to a handler."""
         matched_handlers = []
@@ -951,17 +921,17 @@ class API:
             body = body.encode("utf-8")
 
         try:
-            return json.loads(body)
-        except json.JSONDecodeError:
+            return json_loads(body)
+        except ValueError:
             try:
-                return json.loads(body.decode("utf-8"))
-            except json.JSONDecodeError as e:
+                return json_loads(body.decode("utf-8"))
+            except ValueError as exc:
                 try:
                     parsed = parse_qs(body.decode("utf-8"))
                     return {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
-                except Exception as e:
-                    print(f"Query string parse error: {e}")
-                raise ValueError(f"Unable to parse request body: {e}")
+                except Exception as parse_exc:
+                    logger.debug("Query string parse error: %s", parse_exc)
+                raise ValueError(f"Unable to parse request body: {exc}")
 
     def reverse(self, name: str, **kwargs) -> str:
         """Reverse URL lookup based on endpoint name and provided kwargs."""

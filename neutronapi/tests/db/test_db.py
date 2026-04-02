@@ -7,7 +7,7 @@ import tempfile
 import os
 from datetime import datetime
 
-from neutronapi.db import setup_databases, get_databases
+from neutronapi.db import setup_databases, get_databases, shutdown_all_connections
 from neutronapi.db.models import Model
 from neutronapi.db.fields import CharField, IntegerField, DateTimeField, JSONField, BooleanField, DecimalField
 from neutronapi.db.migrations import MigrationManager, CreateModel
@@ -59,6 +59,26 @@ class TestDatabaseSetup(unittest.TestCase):
         db_manager = get_databases()
         assert db_manager is not None
         assert 'default' in db_manager.config
+
+
+class TestDatabaseShutdown(unittest.IsolatedAsyncioTestCase):
+    async def test_shutdown_all_connections_uses_live_manager(self):
+        setup_databases(
+            {
+                'default': {
+                    'ENGINE': 'aiosqlite',
+                    'NAME': ':memory:',
+                }
+            }
+        )
+
+        db_manager = get_databases()
+        await db_manager.get_connection('default')
+        self.assertTrue(db_manager._connections)
+
+        await shutdown_all_connections()
+
+        self.assertFalse(db_manager._connections)
 
 
 class TestModelFunctionality(unittest.TestCase):

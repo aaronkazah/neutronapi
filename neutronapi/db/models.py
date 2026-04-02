@@ -24,6 +24,7 @@ import datetime
 from .connection import get_databases, DatabaseType
 from .queryset import QuerySet
 from .fields import BaseField, CharField
+from neutronapi.encoders import json_dumps_text
 
 
 class classproperty(property):
@@ -54,9 +55,13 @@ class ModelBase(type):
         cls = super().__new__(mcls, name, bases, attrs)
         fields.update(own_fields)
 
-        # Default primary key: if no explicit PK is declared, add a CharField PK named "id".
-        # The value will be auto-generated on save if not provided by the user.
-        if "id" not in fields and not any(getattr(f, 'primary_key', False) for f in fields.values()):
+        # The root Model base should not contribute a concrete primary key to subclasses.
+        # Add the default id only to real model classes that declare no primary key.
+        if (
+            bases
+            and "id" not in fields
+            and not any(getattr(f, 'primary_key', False) for f in fields.values())
+        ):
             fields["id"] = CharField(primary_key=True)
 
         for fname, field in fields.items():
@@ -92,11 +97,7 @@ class Model(metaclass=ModelBase):
                 value = self._convert_enum_value(value)
                 # Use field's from_db method to properly deserialize values from database
                 if hasattr(field, 'from_db') and callable(field.from_db):
-                    try:
-                        value = field.from_db(value)
-                    except Exception:
-                        # If from_db fails, use the raw value
-                        pass
+                    value = field.from_db(value)
             else:
                 default = getattr(field, 'default', None)
                 value = default() if callable(default) else default
@@ -234,8 +235,7 @@ class Model(metaclass=ModelBase):
                 # Serialize JSON fields
                 if hasattr(field, '__class__') and 'JSONField' in field.__class__.__name__:
                     if isinstance(val, (dict, list)):
-                        import json
-                        val = json.dumps(val)
+                        val = json_dumps_text(val)
                 cols.append(self._quote(db_col))
                 vals.append(val)
 
@@ -257,7 +257,7 @@ class Model(metaclass=ModelBase):
             await db.commit()
 
             # After successful INSERT, set pk to primary key value for future saves
-            self.pk = self.id
+            self.pk = getattr(self, pk_name)
             return
 
         # UPDATE path (create is False)
@@ -284,8 +284,7 @@ class Model(metaclass=ModelBase):
             # Serialize JSON fields
             if hasattr(field, '__class__') and 'JSONField' in field.__class__.__name__:
                 if isinstance(val, (dict, list)):
-                    import json
-                    val = json.dumps(val)
+                    val = json_dumps_text(val)
             placeholder = f"${index}" if is_pg else "?"
             set_cols.append(f"{self._quote(db_col)} = {placeholder}")
             params.append(val)

@@ -1,11 +1,10 @@
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Callable, Awaitable, Optional, List
 from dataclasses import dataclass, field
 from enum import Enum
-import traceback
 
 
 __all__ = [
@@ -78,23 +77,17 @@ class TaskResult:
 
 
 class Background:
-    """Manages periodic task execution and async task queues."""
+    """Manages periodic task execution."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, poll_interval: float = 0.25) -> None:
         """Initialize background task scheduler."""
+        if poll_interval <= 0:
+            raise ValueError("poll_interval must be greater than 0")
         self.tasks: Dict[str, TaskConfig] = {}
         self.running = False
         self._task: Optional[asyncio.Task] = None
-        self.logger = logging.getLogger("TaskScheduler")
-
-        # Queues for different priority levels
-        self._queues: Dict[TaskPriority, asyncio.Queue] = {
-            TaskPriority.LOW: asyncio.Queue(),
-            TaskPriority.NORMAL: asyncio.Queue(),
-            TaskPriority.HIGH: asyncio.Queue(),
-        }
-
-        # Task results storage
+        self.logger = logging.getLogger(__name__)
+        self.poll_interval = poll_interval
         self._results: Dict[str, TaskResult] = {}
 
     def register_task(self, task: Task) -> str:
@@ -178,7 +171,7 @@ class Background:
         """
         if wait:
             while task_id not in self._results:
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(self.poll_interval)
         return self._results.get(task_id)
 
     def remove_task(self, task_id: str) -> None:
@@ -196,7 +189,7 @@ class Background:
         self, frequency: TaskFrequency, interval: Optional[int] = None
     ) -> datetime:
         """Calculate the next run time for a task based on its frequency."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         if frequency == TaskFrequency.ONCE:
             return now
@@ -205,23 +198,23 @@ class Background:
             return now + timedelta(seconds=interval)
 
         if frequency == TaskFrequency.MINUTELY:
-            next_run = now.replace(second=0) + timedelta(minutes=1)
+            next_run = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
         elif frequency == TaskFrequency.HOURLY:
-            next_run = now.replace(minute=0, second=0) + timedelta(hours=1)
+            next_run = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
         elif frequency == TaskFrequency.DAILY:
-            next_run = now.replace(hour=0, minute=0, second=0) + timedelta(days=1)
+            next_run = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         elif frequency == TaskFrequency.WEEKLY:
-            next_run = now.replace(hour=0, minute=0, second=0)
-            days_ahead = 7 - next_run.weekday()
+            next_run = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            days_ahead = (7 - next_run.weekday()) % 7
             next_run += timedelta(days=days_ahead)
         elif frequency == TaskFrequency.MONTHLY:
             if now.month == 12:
                 next_run = now.replace(
-                    year=now.year + 1, month=1, day=1, hour=0, minute=0, second=0
+                    year=now.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0
                 )
             else:
                 next_run = now.replace(
-                    month=now.month + 1, day=1, hour=0, minute=0, second=0
+                    month=now.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0
                 )
         else:
             next_run = now
@@ -232,7 +225,9 @@ class Background:
         """Execute a single task and update its schedule."""
 
         result = TaskResult(
-            task_id=task.task_id, success=False, start_time=datetime.now()
+            task_id=task.task_id,
+            success=False,
+            start_time=datetime.now(timezone.utc),
         )
 
         try:
@@ -242,7 +237,7 @@ class Background:
             result.success = True
 
             if task.frequency != TaskFrequency.ONCE:
-                task.last_run = datetime.now()
+                task.last_run = datetime.now(timezone.utc)
                 task.next_run = self._calculate_next_run(task.frequency, task.interval)
                 self.logger.info(
                     f"Task {task.name} completed. Next run at {task.next_run}"
@@ -257,39 +252,14 @@ class Background:
                 f"Error executing task {task.name}: {str(e)}", exc_info=True
             )
             result.error = e
-            # Print stack trace in logs but not to console
-            self.logger.error(traceback.format_exc())
 
-        result.end_time = datetime.now()
+        result.end_time = datetime.now(timezone.utc)
         self._results[task.task_id] = result
 
         return result
 
-    async def _process_queue(self, priority: TaskPriority) -> None:
-        """Process tasks from a specific priority queue."""
-        while self.running:
-            try:
-
-                task = await self._queues[priority].get()
-
-                await self._execute_task(task)
-                self._queues[priority].task_done()
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-
-                self.logger.error(f"Error in queue processor: {str(e)}", exc_info=True)
-                await asyncio.sleep(1)
-
     async def _scheduler_loop(self) -> None:
         """Main scheduler loop that checks and executes due tasks."""
-        # Start queue processors
-        queue_processors = []
-        for priority in TaskPriority:
-            processor = asyncio.create_task(self._process_queue(priority))
-            queue_processors.append(processor)
-
         self.logger.info(f"Scheduler started with {len(self.tasks)} registered tasks")
 
         # Log all registered tasks
@@ -304,7 +274,7 @@ class Background:
 
         try:
             while self.running:
-                now = datetime.now()
+                now = datetime.now(timezone.utc)
 
                 # Find tasks that need to be run
                 due_tasks = [
@@ -332,19 +302,13 @@ class Background:
                     # Log status every minute to show the scheduler is alive
                     if now.second == 0:
                         alive_msg = f"Scheduler alive at {now}, waiting for tasks... ({len(self.tasks)} registered)"
-                        self.logger.info(alive_msg)
+                        self.logger.debug(alive_msg)
 
-                # Sleep for a short interval before next check
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(self.poll_interval)
 
         except asyncio.CancelledError:
             self.logger.info("Scheduler loop cancelled")
         finally:
-
-            # Cancel queue processors
-            for processor in queue_processors:
-                processor.cancel()
-            await asyncio.gather(*queue_processors, return_exceptions=True)
             self.logger.info("Scheduler loop shutdown complete")
 
     async def start(self) -> None:

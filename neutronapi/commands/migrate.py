@@ -81,16 +81,17 @@ class Command:
             from neutronapi.db.migration_tracker import MigrationTracker
             from neutronapi.db import setup_databases
             from neutronapi.db.connection import get_databases
+            from neutronapi.conf import settings
 
             # Use settings for configuration
             try:
-                from apps.settings import DATABASES
-            except Exception:
-                DATABASES = None
+                databases = settings.DATABASES
+            except AttributeError:
+                databases = None
 
             # Setup databases (only override if settings provided)
-            if DATABASES:
-                setup_databases(DATABASES)
+            if databases:
+                setup_databases(databases)
 
             # Create migration tracker
             tracker = MigrationTracker(base_dir="apps")

@@ -130,6 +130,14 @@ class TestQuerySetMoreSQLite(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(last_obj)
         self.assertIn(last_obj.name, ['A', 'C', 'E'])
 
+    async def test_last_reverses_explicit_ordering(self):
+        ordered = TestObject.objects.order_by("name")
+
+        last_obj = await ordered.last()
+
+        self.assertIsNotNone(last_obj)
+        self.assertEqual(last_obj.name, "E")
+
     async def test_json_lookups(self):
         # Test numeric filtering
         high_qs = await TestObject.objects.filter(meta__score__gt=5).values_list('name', flat=True)

@@ -156,6 +156,7 @@ venv.bak/
 
 .idea
 .idea/
+.DS_Store
 
 # mypy
 .mypy_cache/

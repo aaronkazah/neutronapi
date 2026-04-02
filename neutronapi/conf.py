@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import os
 import sys
 from typing import Any, Optional
@@ -10,6 +11,7 @@ from neutronapi.exceptions import ImproperlyConfigured
 
 
 DEFAULT_SETTINGS_MODULE = "apps.settings"
+logger = logging.getLogger(__name__)
 
 
 def is_neutronapi_development(cwd: Optional[str] = None) -> bool:
@@ -77,7 +79,9 @@ class Settings:
             }
         except ImportError as e:
             if settings_module == DEFAULT_SETTINGS_MODULE and is_neutronapi_development():
-                print("No settings module found. Using default test configuration for NeutronAPI core library.")
+                logger.info(
+                    "No settings module found. Using default test configuration for the NeutronAPI source tree."
+                )
                 self._use_default_test_settings()
             else:
                 raise ImportError(
@@ -111,7 +115,7 @@ class Settings:
             "ENTRY": "neutronapi.tests.entry:app",
             "DATABASES": {"default": db_config},
         }
-        print(f"Using default test configuration with {engine}")
+        logger.info("Using default test configuration with %s", engine)
 
     def _validate_required_settings(self):
         """Validate that all required settings are present."""

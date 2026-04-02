@@ -37,6 +37,11 @@ class OrganizationWithCustomSave(Model):
         await super().save(*args, **kwargs)
 
 
+class ExternalRecord(Model):
+    external_id = CharField(primary_key=True, unique=True)
+    name = CharField(null=False)
+
+
 class TestPKIDConsistency(unittest.IsolatedAsyncioTestCase):
     """Test that pk and id are consistent for proper insert/update detection."""
 
@@ -54,6 +59,9 @@ class TestPKIDConsistency(unittest.IsolatedAsyncioTestCase):
         # Create table
         op = CreateModel('neutronapi.OrganizationWithCustomSave', OrganizationWithCustomSave._neutronapi_fields_)
         await op.database_forwards('neutronapi', self.connection.provider, None, None, self.connection)
+
+        custom_pk_op = CreateModel('neutronapi.ExternalRecord', ExternalRecord._neutronapi_fields_)
+        await custom_pk_op.database_forwards('neutronapi', self.connection.provider, None, None, self.connection)
 
     async def test_fresh_instance_creates_correctly(self):
         """Test that fresh instances work with pk logic."""
@@ -169,6 +177,18 @@ class TestPKIDConsistency(unittest.IsolatedAsyncioTestCase):
         # The record should have the new name (from org2)
         updated_org = await OrganizationWithCustomSave.objects.filter(id=existing_id).first()
         self.assertEqual(updated_org.name, "Second Org", "Should have updated name from org2")
+
+    async def test_non_id_primary_key_sets_pk_correctly(self):
+        record = ExternalRecord(external_id="ext_123", name="External")
+
+        self.assertIsNone(record.pk)
+
+        await record.save(create=True)
+
+        self.assertEqual(record.pk, "ext_123")
+        loaded = await ExternalRecord.objects.get(external_id="ext_123")
+        self.assertEqual(loaded.pk, "ext_123")
+        self.assertEqual(loaded.external_id, "ext_123")
 
 
 if __name__ == '__main__':

@@ -1,15 +1,6 @@
-"""
-Database connections manager and connection wrapper.
-
-Provides:
-- DatabaseType enum
-- Connection wrapper exposing provider + execute/fetch/commit/rollback/close
-- ConnectionsManager with get_connection() and a simple router
-- setup_databases()/get_databases() compatibility helpers
-"""
+"""Database connections manager and connection wrapper."""
 from __future__ import annotations
 
-import os
 from enum import Enum
 from typing import Dict, Any, Optional
 
@@ -94,13 +85,13 @@ class Connection:
 class ConnectionsManager:
     def __init__(self, config: Optional[Dict[str, Dict[str, Any]]] = None):
         if config is None:
-            # Use settings.DATABASES as the only source of truth
             from neutronapi.conf import settings
-            if not hasattr(settings, 'DATABASES'):
+            try:
+                config = settings.DATABASES
+            except AttributeError as exc:
                 raise ImproperlyConfigured(
                     "DATABASES setting is required. Please define DATABASES in your settings module."
-                )
-            config = settings.DATABASES
+                ) from exc
             
         self.config = config
         self.router = DatabaseRouter()
@@ -134,14 +125,5 @@ def setup_databases(config: Optional[Dict[str, Dict[str, Any]]] = None) -> Conne
 def get_databases() -> ConnectionsManager:
     global CONNECTIONS
     if CONNECTIONS is None:
-        # Try to load database configuration from settings
-        try:
-            from neutronapi.conf import settings
-            if hasattr(settings, 'DATABASES'):
-                CONNECTIONS = ConnectionsManager(settings.DATABASES)
-            else:
-                CONNECTIONS = ConnectionsManager()
-        except Exception:
-            # If settings import fails, use default configuration
-            CONNECTIONS = ConnectionsManager()
+        CONNECTIONS = ConnectionsManager()
     return CONNECTIONS
