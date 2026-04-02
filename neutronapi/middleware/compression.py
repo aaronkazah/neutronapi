@@ -17,22 +17,20 @@ except ImportError:
 HeaderList = Iterable[Tuple[bytes, bytes]]
 
 
+def _brotli_params(quality: int = 5, mode: str = "text", lgwin: Optional[int] = None) -> dict:
+    """Build brotli keyword args that work with both brotlicffi and brotli."""
+    if _brotli is None:
+        raise ImportError("No brotli implementation available")
+    mode_val = _brotli.MODE_TEXT if mode == "text" else _brotli.MODE_GENERIC
+    params: dict = {"quality": quality, "mode": mode_val}
+    if lgwin is not None:
+        params["lgwin"] = lgwin
+    return params
+
+
 class _BrotliStreamCompressor:
     def __init__(self, quality: int = 5, mode: str = "text", lgwin: Optional[int] = None):
-        if _BROTLI_IMPL == "brotlicffi":
-            # brotlicffi expects integer mode constants
-            mode_val = _brotli.MODE_TEXT if mode == "text" else _brotli.MODE_GENERIC
-            params = {"quality": quality, "mode": mode_val}
-            if lgwin is not None:
-                params["lgwin"] = lgwin
-            self._c = _brotli.Compressor(**params)
-        elif _BROTLI_IMPL == "brotli":
-            params = {"quality": quality, "mode": _brotli.MODE_TEXT if mode == "text" else _brotli.MODE_GENERIC}
-            if lgwin is not None:
-                params["lgwin"] = lgwin
-            self._c = _brotli.Compressor(**params)
-        else:
-            raise ImportError("No brotli implementation available")
+        self._c = _brotli.Compressor(**_brotli_params(quality, mode, lgwin))
 
     def compress(self, data: bytes) -> bytes:
         if not data:
@@ -45,20 +43,7 @@ class _BrotliStreamCompressor:
 
 
 def _brotli_one_shot(data: bytes, quality: int = 5, mode: str = "text", lgwin: Optional[int] = None) -> bytes:
-    if _BROTLI_IMPL == "brotlicffi":
-        # brotlicffi expects integer mode constants
-        mode_val = _brotli.MODE_TEXT if mode == "text" else _brotli.MODE_GENERIC
-        params = {"quality": quality, "mode": mode_val}
-        if lgwin is not None:
-            params["lgwin"] = lgwin
-        return _brotli.compress(data, **params)
-    elif _BROTLI_IMPL == "brotli":
-        params = {"quality": quality, "mode": _brotli.MODE_TEXT if mode == "text" else _brotli.MODE_GENERIC}
-        if lgwin is not None:
-            params["lgwin"] = lgwin
-        return _brotli.compress(data, **params)
-    else:
-        raise ImportError("No brotli implementation available")
+    return _brotli.compress(data, **_brotli_params(quality, mode, lgwin))
 
 
 class CompressionMiddleware:
