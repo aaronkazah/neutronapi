@@ -2,6 +2,7 @@ import unittest
 
 from neutronapi.base import API
 from neutronapi.application import Application
+from neutronapi.middleware.cors import CorsMiddleware
 
 
 class PingAPI(API):
@@ -26,6 +27,15 @@ async def call_asgi(app, scope, body: bytes = b""):
     return messages
 
 
+class PassThroughMiddleware:
+    def __init__(self):
+        self.app = None
+        self.registry = None
+
+    async def __call__(self, scope, receive, send, **kwargs):
+        await self.app(scope, receive, send, **kwargs)
+
+
 class TestAPIAndApplication(unittest.IsolatedAsyncioTestCase):
     async def test_api_reverse(self):
         api = PingAPI()
@@ -47,6 +57,43 @@ class TestAPIAndApplication(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(messages[0]["type"], "http.response.start")
         self.assertEqual(messages[0]["status"], 200)
         self.assertEqual(messages[1]["type"], "http.response.body")
+
+    async def test_application_keeps_allow_all_cors_with_custom_middleware(self):
+        app = Application(
+            {"ping": PingAPI()},
+            cors_allow_all=True,
+            middlewares=[PassThroughMiddleware()],
+        )
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/ping",
+            "headers": [
+                (b"host", b"api.example.com"),
+                (b"origin", b"https://evil.example"),
+            ],
+        }
+
+        messages = await call_asgi(app, scope)
+        headers = dict(messages[0]["headers"])
+        self.assertEqual(
+            headers[b"Access-Control-Allow-Origin"],
+            b"https://evil.example",
+        )
+        self.assertEqual(headers[b"Vary"], b"Origin")
+
+    def test_application_rejects_double_cors_configuration(self):
+        with self.assertRaises(ValueError) as ctx:
+            Application(
+                {"ping": PingAPI()},
+                cors_allow_all=True,
+                middlewares=[
+                    CorsMiddleware(allowed_origins=["https://app.example.com"])
+                ],
+            )
+
+        self.assertIn("Ambiguous CORS configuration", str(ctx.exception))
 
 class MockUtil:
     def __init__(self, util_id):

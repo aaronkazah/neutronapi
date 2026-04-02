@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Callable, Dict, List
 
 from neutronapi.conf import settings
+
+logger = logging.getLogger(__name__)
 
 
 class AllowedHostsMiddleware:
@@ -24,26 +27,37 @@ class AllowedHostsMiddleware:
         return self._custom_allowed_hosts or settings.get("ALLOWED_HOSTS", ["*"])
 
     async def __call__(self, scope: Dict, receive: Callable, send: Callable, **kwargs):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send, **kwargs)
-            return
+        scope_type = scope["type"]
 
-        headers = dict(scope.get("headers", []))
-        host_header = headers.get(b"host")
+        # Validate Host header for both HTTP and WebSocket connections
+        if scope_type in ("http", "websocket"):
+            headers = dict(scope.get("headers", []))
+            host_header = headers.get(b"host")
 
-        if not host_header:
-            if not self.debug:
-                await self.send_error_response(
-                    send, 400, "Bad Request: Missing Host header"
-                )
-                return
-        else:
-            host = host_header.decode("utf-8", "ignore")
-            if not self.is_host_allowed(host, self.get_allowed_hosts()):
-                await self.send_error_response(
-                    send, 400, f"Bad Request: Host '{host}' is not allowed"
-                )
-                return
+            if not host_header:
+                if not self.debug:
+                    if scope_type == "websocket":
+                        await send({"type": "websocket.close", "code": 4003})
+                        return
+                    await self.send_error_response(
+                        send, 400, "Bad Request: Missing Host header"
+                    )
+                    return
+                else:
+                    logger.warning(
+                        "AllowedHostsMiddleware: request with missing Host header "
+                        "passed through in debug mode. This would be rejected in production."
+                    )
+            else:
+                host = host_header.decode("utf-8", "ignore")
+                if not self.is_host_allowed(host, self.get_allowed_hosts()):
+                    if scope_type == "websocket":
+                        await send({"type": "websocket.close", "code": 4003})
+                        return
+                    await self.send_error_response(
+                        send, 400, "Bad Request: Invalid Host header"
+                    )
+                    return
 
         await self.app(scope, receive, send, **kwargs)
 

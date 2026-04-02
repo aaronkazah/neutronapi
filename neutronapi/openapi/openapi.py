@@ -230,22 +230,40 @@ class OpenAPIGenerator:
                     }
                 )
 
-        # Add security schemes if authentication is required
-        if api.authentication_class:
-            self._add_security_scheme(api.authentication_class)
-
         # Process all routes
         for route_info in api.routes:
-            (
-                pattern,
-                handler,
-                methods,
-                permission_classes,
-                throttle_classes,
-                name,
-                original_path,
-                skip_body_parsing,
-            ) = route_info
+            if len(route_info) == 9:
+                (
+                    pattern,
+                    handler,
+                    methods,
+                    permission_classes,
+                    throttle_classes,
+                    name,
+                    original_path,
+                    skip_body_parsing,
+                    route_authentication_class,
+                ) = route_info
+            else:
+                (
+                    pattern,
+                    handler,
+                    methods,
+                    permission_classes,
+                    throttle_classes,
+                    name,
+                    original_path,
+                    skip_body_parsing,
+                ) = route_info
+                route_authentication_class = None
+
+            effective_auth = (
+                route_authentication_class
+                if route_authentication_class is not None
+                else api.authentication_class
+            )
+            if effective_auth:
+                self._add_security_scheme(effective_auth)
 
             # Skip websocket routes for now
             if methods == ["WEBSOCKET"]:
@@ -264,6 +282,7 @@ class OpenAPIGenerator:
                 name,
                 permission_classes,
                 throttle_classes,
+                route_authentication_class,
             )
 
     def _should_include_endpoint(
@@ -310,6 +329,7 @@ class OpenAPIGenerator:
         name: Optional[str],
         permission_classes: List[Any],
         throttle_classes: List[Any],
+        route_authentication_class: Any = None,
     ) -> None:
         """Process a single route and add it to the OpenAPI spec."""
         # Convert path parameters to OpenAPI format
@@ -331,6 +351,7 @@ class OpenAPIGenerator:
                 path,
                 permission_classes,
                 throttle_classes,
+                route_authentication_class,
             )
 
             self.spec["paths"][openapi_path][method_lower] = operation
@@ -344,6 +365,7 @@ class OpenAPIGenerator:
         path: str,
         permission_classes: List[Any],
         throttle_classes: List[Any],
+        route_authentication_class: Any = None,
     ) -> Dict[str, Any]:
         """Create an OpenAPI operation object."""
         # Check if handler has enhanced endpoint metadata
@@ -380,10 +402,22 @@ class OpenAPIGenerator:
         if endpoint_metadata and endpoint_metadata.deprecated:
             operation["deprecated"] = True
 
-        # Add security if authentication is required
-        if api.authentication_class or permission_classes:
+        effective_auth = (
+            route_authentication_class
+            if route_authentication_class is not None
+            else api.authentication_class
+        )
+
+        # Add security if authentication is required.
+        # An explicit route-level public auth marker should emit security: []
+        # so it overrides protected API defaults in generated docs.
+        if (
+            api.authentication_class
+            or route_authentication_class is not None
+            or permission_classes
+        ):
             operation["security"] = self._generate_security_requirements(
-                api.authentication_class
+                effective_auth
             )
 
         return operation
@@ -473,6 +507,8 @@ class OpenAPIGenerator:
         self, api: API, method: str, endpoint_metadata
     ) -> Optional[Dict[str, Any]]:
         """Get request body from endpoint metadata or auto-generate."""
+        if endpoint_metadata and endpoint_metadata.skip_body_parsing:
+            return None
         if endpoint_metadata and endpoint_metadata.request_schema:
             content_type = (
                 endpoint_metadata.request_content_type or "application/json"
@@ -746,15 +782,16 @@ class OpenAPIGenerator:
 
     def _add_security_scheme(self, auth_class: Any) -> None:
         """Add security scheme based on authentication class."""
+        auth_name = getattr(auth_class, "__name__", auth_class.__class__.__name__)
         # Basic JWT/Bearer token scheme
-        if "JWT" in auth_class.__name__ or "Token" in auth_class.__name__:
+        if "JWT" in auth_name or "Token" in auth_name:
             self.spec["components"]["securitySchemes"]["bearerAuth"] = {
                 "type": "http",
                 "scheme": "bearer",
                 "bearerFormat": "JWT",
             }
         # API Key scheme
-        elif "APIKey" in auth_class.__name__:
+        elif "APIKey" in auth_name:
             self.spec["components"]["securitySchemes"]["apiKey"] = {
                 "type": "apiKey",
                 "in": "header",
@@ -768,9 +805,10 @@ class OpenAPIGenerator:
         if not auth_class:
             return []
 
-        if "JWT" in auth_class.__name__ or "Token" in auth_class.__name__:
+        auth_name = getattr(auth_class, "__name__", auth_class.__class__.__name__)
+        if "JWT" in auth_name or "Token" in auth_name:
             return [{"bearerAuth": []}]
-        elif "APIKey" in auth_class.__name__:
+        elif "APIKey" in auth_name:
             return [{"apiKey": []}]
 
         return []

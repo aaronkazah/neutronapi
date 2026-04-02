@@ -59,7 +59,20 @@ class CorsMiddleware:
                     self.origin_patterns.append((re.compile(pattern), origin))
 
     async def __call__(self, scope: Dict[str, Any], receive: Callable, send: Callable, **kwargs: Any) -> None:
-        if scope["type"] != "http":
+        scope_type = scope["type"]
+
+        # Validate Origin for WebSocket upgrade requests
+        if scope_type == "websocket":
+            if not self.allow_all_origins:
+                headers = dict(scope.get("headers", []))
+                origin = headers.get(b"origin", b"").decode("utf-8", "ignore")
+                if origin and not self.is_origin_allowed(origin):
+                    await send({"type": "websocket.close", "code": 4003})
+                    return
+            await self.app(scope, receive, send, **kwargs)
+            return
+
+        if scope_type != "http":
             await self.app(scope, receive, send, **kwargs)
             return
 
@@ -81,7 +94,6 @@ class CorsMiddleware:
     async def handle_preflight(self, origin: str, send: Callable):
         response_headers = [
             (b"Access-Control-Allow-Origin", origin.encode("utf-8")),
-            (b"Access-Control-Allow-Credentials", b"True"),
             (
                 b"Access-Control-Allow-Methods",
                 b"GET, POST, PUT, PATCH, DELETE, OPTIONS",
@@ -91,6 +103,9 @@ class CorsMiddleware:
             (b"Vary", b"Origin"),
             (b"Content-Length", b"0"),
         ]
+        # Only send credentials header with explicit allowlist origins
+        if not self.allow_all_origins:
+            response_headers.insert(1, (b"Access-Control-Allow-Credentials", b"true"))
         await send(
             {
                 "type": "http.response.start",
@@ -148,11 +163,15 @@ class CorsMiddleware:
         return False
 
     def get_cors_headers(self, origin: str) -> List[Tuple[bytes, bytes]]:
-        return [
+        headers = [
             (b"Access-Control-Allow-Origin", origin.encode("utf-8")),
-            (b"Access-Control-Allow-Credentials", b"True"),
             (b"Vary", b"Origin"),
         ]
+        # Only send credentials header when origin is from an explicit allowlist,
+        # not when allow_all_origins is True (spec violation: credentials + wildcard)
+        if not self.allow_all_origins:
+            headers.append((b"Access-Control-Allow-Credentials", b"true"))
+        return headers
 
     def _validate_origin_format(self, origin: str) -> None:
         """Validate that an origin follows the correct format.

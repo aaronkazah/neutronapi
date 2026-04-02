@@ -203,14 +203,15 @@ class BinaryParser(BaseParser):
         """
         result = {"raw": raw_body or b""}
 
-        # If it looks like JSON, also parse it
+        # If content-type declares JSON, parse it strictly — no silent fallback
         ctype = (headers.get(b"content-type") or b"").split(b";", 1)[0].strip().lower()
         if ctype == b"application/json" and raw_body:
             try:
                 parsed = json_loads(raw_body)
                 result["body"] = parsed
             except Exception:
-                result["body"] = raw_body  # Fallback to raw if JSON parsing fails
+                from neutronapi.api import exceptions
+                raise exceptions.ValidationError("Invalid JSON body")
         else:
             result["body"] = raw_body
 

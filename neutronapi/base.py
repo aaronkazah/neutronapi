@@ -226,7 +226,10 @@ class API:
     authentication_class: Optional[Any] = None
     name: Optional[str] = None
     page_size: int = 10
+    MAX_PAGE_SIZE: int = 100
+    MAX_BODY_SIZE: int = 10 * 1024 * 1024  # 10MB
     lookup_field: str = "id"
+    allowed_ordering_fields: List[str] = []
 
     # OpenAPI documentation fields
     title: Optional[str] = None
@@ -322,17 +325,37 @@ class API:
         params = self.params(scope)
         scope["params"] = params
 
-        # Handle pagination
-        scope["page"] = int(params.get("page", "1"))
-        scope["page_size"] = int(
-            params.get("page_size", str(getattr(self, "page_size", 10)))
-        )
+        # Handle pagination with bounds validation
+        try:
+            scope["page"] = max(1, int(params.get("page", "1")))
+        except (ValueError, TypeError):
+            raise exceptions.ValidationError("Invalid page parameter: must be a positive integer")
 
-        # Handle ordering
+        try:
+            raw_page_size = int(params.get("page_size", str(getattr(self, "page_size", 10))))
+            scope["page_size"] = max(1, min(raw_page_size, self.MAX_PAGE_SIZE))
+        except (ValueError, TypeError):
+            raise exceptions.ValidationError("Invalid page_size parameter: must be a positive integer")
+
+        # Handle ordering with allowlist validation
         if "ordering" in params:
-            scope["ordering"] = params["ordering"]
+            ordering_value = params["ordering"]
+            # Strip leading '-' for validation
+            field_name = ordering_value.lstrip("-")
+            if self.allowed_ordering_fields and field_name not in self.allowed_ordering_fields:
+                raise exceptions.ValidationError(
+                    f"Invalid ordering field: '{field_name}'. "
+                    f"Allowed fields: {', '.join(self.allowed_ordering_fields)}"
+                )
+            scope["ordering"] = ordering_value
+
         if "order_direction" in params:
-            scope["order_direction"] = params["order_direction"]
+            direction = params["order_direction"].upper()
+            if direction not in ("ASC", "DESC"):
+                raise exceptions.ValidationError(
+                    "Invalid order_direction: must be 'ASC' or 'DESC'"
+                )
+            scope["order_direction"] = direction
 
         return scope
 
@@ -363,6 +386,8 @@ class API:
         include_in_docs: bool = True,
         # Body parsing control
         skip_body_parsing: bool = False,
+        # Body size limit override (bytes); None uses API-level MAX_BODY_SIZE
+        max_body_size: Optional[int] = None,
     ) -> Callable:
         """Decorator for defining API endpoints.
 
@@ -499,13 +524,28 @@ class API:
             # Attach extra endpoint metadata for middlewares/parsers
             wrapper._endpoint_middlewares = middlewares or []
             wrapper._endpoint_parsers = parsers or []
+            # Per-endpoint body size limit override
+            if max_body_size is not None:
+                wrapper._max_body_size = max_body_size
             return wrapper
 
         return decorator
 
     @staticmethod
-    def websocket(path: str) -> Callable:
-        """Decorator for defining WebSocket endpoints."""
+    def websocket(
+        path: str,
+        authentication_class: Optional[Any] = None,
+        permission_classes: Optional[List[Any]] = None,
+        throttle_classes: Optional[List[Any]] = None,
+    ) -> Callable:
+        """Decorator for defining WebSocket endpoints.
+
+        Args:
+            path: URL path pattern
+            authentication_class: Override auth for this endpoint (None = use API-level)
+            permission_classes: Override permissions for this endpoint
+            throttle_classes: Override throttles for this endpoint
+        """
 
         def decorator(func: Callable):
             @wraps(func)
@@ -515,6 +555,9 @@ class API:
             wrapper._websocket_metadata = {
                 "path": path,
                 "handler": func,
+                "authentication_class": authentication_class,
+                "permission_classes": permission_classes,
+                "throttle_classes": throttle_classes,
             }
             return wrapper
 
@@ -574,12 +617,16 @@ class API:
         """
         queryset = await self.get_base_queryset(scope)
 
-        # Handle ordering
+        # Handle ordering — field is already validated in _process_client_params
         if ordering := scope.get("ordering"):
             order_direction = scope.get("order_direction", "ASC")
             if ordering.startswith("-"):
                 ordering = ordering[1:]
                 order_direction = "DESC"
+
+            # Double-check direction is safe (belt-and-suspenders)
+            if order_direction not in ("ASC", "DESC"):
+                order_direction = "ASC"
 
             queryset = queryset.order_by(
                 f"{'-' if order_direction == 'DESC' else ''}{ordering}"
@@ -660,16 +707,20 @@ class API:
             if not path.startswith("/") and path:
                 path = "/" + path
             pattern = self._convert_path_to_regex(path)
+            ws_auth_class = metadata.get("authentication_class")
+            ws_permission_classes = metadata.get("permission_classes") or self.permission_classes
+            ws_throttle_classes = metadata.get("throttle_classes") or self.throttle_classes
             self.routes.append(
                 (
                     re.compile(pattern),
                     attr,
-                    ["WEBSOCKET"],  # Special method type for websockets
-                    [],  # No permission classes for now, can be added later
-                    [],  # No throttle classes for now, can be added later
+                    ["WEBSOCKET"],
+                    ws_permission_classes,
+                    ws_throttle_classes,
                     None,
                     path,
                     False,  # skip_body_parsing not applicable for websockets
+                    ws_auth_class,  # route-level auth override
                 )
             )
 
@@ -705,6 +756,7 @@ class API:
                 name,
                 path,
                 skip_body_parsing,
+                authentication_class,  # route-level auth override (None = use API-level)
             )
         )
 
@@ -781,13 +833,16 @@ class API:
                 _,
                 _,
                 skip_body_parsing,
+                route_authentication_class,
             ) = await self.match(path, method)
 
             if handler is None:
                 raise exceptions.MethodNotAllowed(method, path)
 
-            if self.authentication_class:
-                await self.authentication_class.authorize(scope)
+            # Route-level auth takes precedence over API-level auth
+            effective_auth = route_authentication_class if route_authentication_class is not None else self.authentication_class
+            if effective_auth:
+                await effective_auth.authorize(scope)
 
             await self.check_permissions(scope, permission_classes)
             await self.check_throttles(scope, throttle_classes)
@@ -803,35 +858,47 @@ class API:
                 }
             )
 
+            # Resolve body size limit: per-endpoint override or API-level default
+            max_body = getattr(handler, "_max_body_size", None) or self.MAX_BODY_SIZE
+
             # Parse request body using parser instances
-            from neutronapi.parsers import JSONParser
+            from neutronapi.parsers import JSONParser, BaseParser
             headers_dict = dict(scope.get("headers", []))
             raw_body = b""
-            if method in ["POST", "PUT", "PATCH"]:
-                # Read complete body once
+            if method in ["POST", "PUT", "PATCH"] and not skip_body_parsing:
+                # Read complete body once, enforcing size limit
                 msg = await receive()
                 if msg.get("type") == "http.request":
                     raw_body = msg.get("body", b"")
+                    if len(raw_body) > max_body:
+                        raise exceptions.APIException(
+                            "Request body too large",
+                            type="request_too_large",
+                            status=413,
+                        )
                     more = msg.get("more_body", False)
                     while more:
                         msg = await receive()
                         raw_body += msg.get("body", b"")
+                        if len(raw_body) > max_body:
+                            raise exceptions.APIException(
+                                "Request body too large",
+                                type="request_too_large",
+                                status=413,
+                            )
                         more = msg.get("more_body", False)
 
             # Endpoint-specific parsers
             endpoint_parsers = list(getattr(handler, "_endpoint_parsers", []) or [])
 
             parsed_kwargs = {}
-            if method in ["POST", "PUT", "PATCH"]:
+            if method in ["POST", "PUT", "PATCH"] and not skip_body_parsing:
                 # Select parser: first matching endpoint parser; else default JSONParser()
                 parser = None
                 for p in endpoint_parsers:
-                    try:
-                        if hasattr(p, 'matches') and p.matches(headers_dict):
-                            parser = p
-                            break
-                    except Exception:
-                        continue
+                    if isinstance(p, BaseParser) and p.matches(headers_dict):
+                        parser = p
+                        break
                 if parser is None:
                     parser = JSONParser()
                 parsed_kwargs = await parser.parse(scope, receive, raw_body=raw_body, headers=headers_dict)
@@ -877,7 +944,7 @@ class API:
     async def handle_websocket(
         self, scope: Scope, receive: Receive, send: Send, **kwargs
     ) -> None:
-        """Handle websocket connections."""
+        """Handle websocket connections with full security pipeline."""
         path = scope["path"].rstrip("/")
 
         try:
@@ -889,6 +956,7 @@ class API:
                 _,
                 _,
                 _,
+                route_authentication_class,
             ) = await self.match(path, "WEBSOCKET")
         except exceptions.NotFound:
             await send({"type": "websocket.close", "code": 4004})
@@ -896,6 +964,18 @@ class API:
 
         if handler is None:
             await send({"type": "websocket.close", "code": 4004})
+            return
+
+        # Route-level auth takes precedence over API-level auth
+        effective_auth = route_authentication_class if route_authentication_class is not None else self.authentication_class
+
+        try:
+            if effective_auth:
+                await effective_auth.authorize(scope)
+            await self.check_permissions(scope, permission_classes)
+            await self.check_throttles(scope, throttle_classes)
+        except exceptions.APIException:
+            await send({"type": "websocket.close", "code": 4001})
             return
 
         await handler(scope, receive, send, **kwargs)
@@ -913,6 +993,7 @@ class API:
             name,
             original_path,
             skip_body_parsing,
+            route_authentication_class,
         ) in self.routes:
             match = pattern.match(path)
             if match:
@@ -926,6 +1007,7 @@ class API:
                         name,
                         original_path,
                         skip_body_parsing,
+                        route_authentication_class,
                     )
                 )
 
@@ -942,6 +1024,7 @@ class API:
             name,
             original_path,
             skip_body_parsing,
+            route_authentication_class,
         ) in matched_handlers:
             if method in allowed_methods:
                 kwargs = match.groupdict()
@@ -953,6 +1036,7 @@ class API:
                     name,
                     original_path,
                     skip_body_parsing,
+                    route_authentication_class,
                 )
 
         if matched_handlers:
@@ -1006,6 +1090,7 @@ class API:
             route_name,
             original_path,
             skip_body_parsing,
+            _route_auth,
         ) in self.routes:
             if route_name == name:
                 url = original_path

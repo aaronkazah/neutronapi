@@ -189,6 +189,20 @@ class QuerySet(Generic[T]):
             })
         return qs
 
+    @staticmethod
+    def _quote_identifier(name: str) -> str:
+        """Quote a SQL identifier to prevent injection.
+
+        Uses double-quote escaping (standard SQL) which works for both
+        PostgreSQL and SQLite. Any embedded double-quotes are escaped
+        by doubling them.
+        """
+        # Reject obviously malicious input — identifiers should be alphanumeric + underscores
+        import re as _re
+        if not _re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+            raise ValueError(f"Invalid field name for ordering: '{name}'")
+        return f'"{name}"'
+
     def _is_json_field_lookup(self, field_path: str) -> bool:
         """Check if a field path is a JSON field lookup."""
         parts = field_path.split('__')
@@ -957,13 +971,18 @@ class QuerySet(Generic[T]):
                     field_name = order_item['field']
                     direction = order_item['direction']
 
+                    # Validate direction is strictly ASC or DESC
+                    if direction not in ('ASC', 'DESC'):
+                        direction = 'ASC'
+
                     # Check if this is a JSON field lookup
                     if '__' in field_name and self._is_json_field_lookup(field_name):
                         json_expr = self._build_json_order_expression(field_name)
                         order_parts.append(f"{json_expr} {direction}")
                     else:
-                        # Regular field ordering
-                        order_parts.append(f"{field_name} {direction}")
+                        # Quote field name to prevent SQL injection
+                        safe_field = self._quote_identifier(field_name)
+                        order_parts.append(f"{safe_field} {direction}")
                 else:
                     # Legacy string format (for backward compatibility)
                     order_parts.append(order_item)

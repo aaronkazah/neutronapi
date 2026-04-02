@@ -68,8 +68,11 @@ class PostgreSQLProvider(BaseProvider):
                 create_pool_kwargs = dict(self._conn_kwargs)
                 if self._server_settings:
                     create_pool_kwargs['server_settings'] = self._server_settings
-                # Use sensible defaults; no project-specific env flags
-                self._pool = await asyncpg.create_pool(min_size=1, max_size=10, **create_pool_kwargs)
+                # Pool size configurable via DATABASES[alias]['OPTIONS']
+                options = self.config.get('OPTIONS', {}) or {}
+                min_pool = int(options.get('min_pool_size', 1))
+                max_pool = int(options.get('max_pool_size', 10))
+                self._pool = await asyncpg.create_pool(min_size=min_pool, max_size=max_pool, **create_pool_kwargs)
                 self._loop = loop
             return self._pool
 

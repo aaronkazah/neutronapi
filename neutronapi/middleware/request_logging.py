@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+from neutronapi.conf import settings
 from neutronapi.event_bus import events
 from neutronapi.events import RequestCompleted, RequestError, RequestReceived
 from neutronapi.request_id import generate_request_id
@@ -22,9 +23,15 @@ class RequestLoggingMiddleware:
         return decoded or None
 
     def _extract_ip(self, headers: dict[bytes, bytes], scope: dict) -> str:
-        forwarded = self._header_value(headers, b"cf-connecting-ip") or self._header_value(headers, b"x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",", 1)[0].strip()
+        # Only trust proxy headers when explicitly configured via TRUSTED_PROXY_HEADERS setting.
+        # Without configuration, always use the direct connection IP from scope["client"].
+        trusted_headers = settings.get("TRUSTED_PROXY_HEADERS", [])
+        if trusted_headers:
+            for header_name in trusted_headers:
+                header_bytes = header_name.lower().encode("utf-8") if isinstance(header_name, str) else header_name
+                forwarded = self._header_value(headers, header_bytes)
+                if forwarded:
+                    return forwarded.split(",", 1)[0].strip()
         client = scope.get("client") or ("", 0)
         return client[0] or ""
 

@@ -1,5 +1,6 @@
 import unittest
 
+from neutronapi.application import Application
 from neutronapi.base import API
 from neutronapi.openapi.openapi import OpenAPIGenerator
 
@@ -194,6 +195,20 @@ class UploadAPI(API):
     )
     async def create_upload(self, scope, receive, send, **kwargs):
         return await self.response({"id": "upl_123", "object": "upload"})
+
+
+class NoBodyActionAPI(API):
+    resource = "/v1/actions"
+    name = "actions"
+
+    @API.endpoint(
+        "/trigger",
+        methods=["POST"],
+        name="trigger",
+        skip_body_parsing=True,
+    )
+    async def trigger(self, scope, receive, send, **kwargs):
+        return await self.response({"ok": True})
 
 
 class CreatedAPI(API):
@@ -562,3 +577,91 @@ class TestOpenAPI(unittest.IsolatedAsyncioTestCase):
         responses = spec["paths"]["/v1/created/"]["post"]["responses"]
         self.assertIn("201", responses)
         self.assertNotIn("200", responses)
+
+    async def test_skip_body_parsing_omits_request_body(self):
+        """No-body action endpoints should not emit a synthetic request body in OpenAPI."""
+        gen = OpenAPIGenerator(title="Test Actions", version="1.0.0")
+        spec = await gen.generate_from_api(NoBodyActionAPI())
+
+        trigger_post = spec["paths"]["/v1/actions/trigger"]["post"]
+        self.assertNotIn("requestBody", trigger_post)
+
+    async def test_route_level_auth_is_documented_on_public_api(self):
+        class TokenAuth:
+            @classmethod
+            async def authorize(cls, scope):
+                return None
+
+        class MixedAPI(API):
+            resource = "/v1/mixed"
+            name = "mixed"
+
+            @API.endpoint("/", methods=["GET"], authentication_class=TokenAuth)
+            async def secure(self, scope, receive, send, **kwargs):
+                return await self.response({"ok": True})
+
+        gen = OpenAPIGenerator(title="Test Security", version="1.0.0")
+        spec = await gen.generate_from_api(MixedAPI())
+
+        self.assertIn("bearerAuth", spec["components"]["securitySchemes"])
+        self.assertEqual(
+            spec["paths"]["/v1/mixed/"]["get"]["security"],
+            [{"bearerAuth": []}],
+        )
+
+    async def test_route_level_public_override_is_documented_on_protected_api(self):
+        class TokenAuth:
+            @classmethod
+            async def authorize(cls, scope):
+                return None
+
+        class PublicAuth:
+            @classmethod
+            async def authorize(cls, scope):
+                return None
+
+        class MixedAPI(API):
+            resource = "/v1/mixed"
+            name = "mixed"
+            authentication_class = TokenAuth
+
+            @API.endpoint("/public", methods=["GET"], authentication_class=PublicAuth)
+            async def public(self, scope, receive, send, **kwargs):
+                return await self.response({"public": True})
+
+            @API.endpoint("/private", methods=["GET"])
+            async def private(self, scope, receive, send, **kwargs):
+                return await self.response({"private": True})
+
+        gen = OpenAPIGenerator(title="Test Security", version="1.0.0")
+        spec = await gen.generate_from_api(MixedAPI())
+
+        self.assertEqual(spec["paths"]["/v1/mixed/public"]["get"]["security"], [])
+        self.assertEqual(
+            spec["paths"]["/v1/mixed/private"]["get"]["security"],
+            [{"bearerAuth": []}],
+        )
+
+    async def test_generate_from_application_respects_route_level_auth(self):
+        class TokenAuth:
+            @classmethod
+            async def authorize(cls, scope):
+                return None
+
+        class AppAPI(API):
+            resource = "/v1/app"
+            name = "app"
+
+            @API.endpoint("/", methods=["GET"], authentication_class=TokenAuth)
+            async def secure(self, scope, receive, send, **kwargs):
+                return await self.response({"ok": True})
+
+        app = Application(apis=[AppAPI()])
+        gen = OpenAPIGenerator(title="Test App Security", version="1.0.0")
+        spec = await gen.generate(source=app)
+
+        self.assertIn("bearerAuth", spec["components"]["securitySchemes"])
+        self.assertEqual(
+            spec["paths"]["/v1/app/"]["get"]["security"],
+            [{"bearerAuth": []}],
+        )

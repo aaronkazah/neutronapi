@@ -71,7 +71,7 @@ class Application:
         allowed_hosts: Optional[List[str]] = None,
         static_hosts: Optional[List[str]] = None,
         static_resolver: Optional[Callable] = None,
-        cors_allow_all: bool = True,
+        cors_allow_all: bool = False,
     ) -> None:
         """
         Create a new ASGI application with dependency injection support.
@@ -88,7 +88,9 @@ class Application:
             allowed_hosts: List of allowed host names for security
             static_hosts: Static file hosting configuration
             static_resolver: Custom static file resolver
-            cors_allow_all: Whether to allow all CORS origins (default: True)
+            cors_allow_all: Whether to allow all CORS origins (default: False).
+                           Explicit allowlist CORS should be configured by passing
+                           a CorsMiddleware instance in middlewares.
 
         Example:
             >>> app = Application(
@@ -210,23 +212,32 @@ class Application:
             static_resolver=static_resolver,
         )
 
-        # Compose provided middlewares (instances only), then wrap the whole HTTP stack with
-        # request logging so it sees handler responses and middleware rejections.
+        # Compose middleware stack. AllowedHosts is always enforced when configured.
+        # cors_allow_all wraps the final user/application stack with a single
+        # allow-all CorsMiddleware; explicit allowlist CORS remains middleware-driven.
+        composed = base_router
+
         if middlewares:
-            composed = base_router
-            # Middlewares are declared outermost-first; apply in reverse to wrap
+            if cors_allow_all and any(isinstance(mw, CorsMiddleware) for mw in middlewares):
+                raise ValueError(
+                    "Ambiguous CORS configuration: cors_allow_all=True cannot be used "
+                    "together with a user-supplied CorsMiddleware."
+                )
+            # User-provided middlewares are declared outermost-first; apply in reverse to wrap
             for mw in reversed(middlewares):
-                # Middleware instances are expected to support late-bound app/registry.
                 mw.app = composed
                 mw.registry = self.registry
                 composed = mw
-            self.app = RequestLoggingMiddleware(composed)
-        else:
-            hosts_app = AllowedHostsMiddleware(base_router,
-                                               allowed_hosts=allowed_hosts) if allowed_hosts else base_router
-            self.app = RequestLoggingMiddleware(
-                CorsMiddleware(hosts_app, allow_all_origins=cors_allow_all)
-            )
+
+        if cors_allow_all:
+            composed = CorsMiddleware(composed, allow_all_origins=True)
+
+        # Always apply AllowedHosts when configured — wraps outside user middleware
+        # and outside CORS so host validation cannot be accidentally bypassed
+        if allowed_hosts:
+            composed = AllowedHostsMiddleware(composed, allowed_hosts=allowed_hosts)
+
+        self.app = RequestLoggingMiddleware(composed)
 
         # Expose lifecycle hooks on Application instance for compatibility
         # (handlers are already set on the app function above)

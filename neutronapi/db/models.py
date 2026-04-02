@@ -195,6 +195,12 @@ class Model(metaclass=ModelBase):
         schema, table = self._get_parsed_table_name()
         table_ident = f"{self._quote(schema)}.{self._quote(table)}" if is_pg else self._quote(f"{schema}_{table}")
 
+        # Validate all fields before persisting
+        for fname, field in self._neutronapi_fields_.items():
+            val = getattr(self, fname, None)
+            if val is not None and hasattr(field, 'validate'):
+                field.validate(val)
+
         # Determine primary key
         pk_fields = [name for name, f in self._neutronapi_fields_.items() if getattr(f, 'primary_key', False)]
         pk_name = pk_fields[0] if len(pk_fields) == 1 else None

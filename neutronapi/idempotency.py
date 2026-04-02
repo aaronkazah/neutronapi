@@ -44,11 +44,16 @@ class _StoredEntry:
 
 
 class InMemoryIdempotencyStore(IdempotencyStore):
-    """In-memory idempotency store with TTL expiry."""
+    """In-memory idempotency store with TTL expiry and bounded capacity."""
 
-    def __init__(self) -> None:
+    MAX_KEY_LENGTH = 256
+    MAX_ENTRIES = 10_000
+
+    def __init__(self, max_key_length: int = 256, max_entries: int = 10_000) -> None:
         self._entries: dict[str, _StoredEntry] = {}
         self._lock = asyncio.Lock()
+        self.MAX_KEY_LENGTH = max_key_length
+        self.MAX_ENTRIES = max_entries
 
     def _purge_expired(self) -> None:
         now = time.monotonic()
@@ -69,6 +74,10 @@ class InMemoryIdempotencyStore(IdempotencyStore):
             self._purge_expired()
             if key in self._entries:
                 return False
+            # Evict oldest entries if at capacity
+            while len(self._entries) >= self.MAX_ENTRIES:
+                oldest_key = min(self._entries, key=lambda k: self._entries[k].expires_at)
+                self._entries.pop(oldest_key, None)
             self._entries[key] = _StoredEntry(state="pending", expires_at=time.monotonic() + ttl)
             return True
 
@@ -150,6 +159,21 @@ class IdempotencyMiddleware:
         key = (headers.get(b"idempotency-key") or b"").decode("utf-8", "ignore").strip()
         if not key:
             await self.app(scope, receive, send)
+            return
+
+        # Reject oversized keys to prevent memory abuse
+        max_len = getattr(self.store, "MAX_KEY_LENGTH", 256)
+        if len(key) > max_len:
+            response = Response(
+                body={
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": f"Idempotency-Key exceeds maximum length of {max_len}",
+                    }
+                },
+                status_code=400,
+            )
+            await response(scope, receive, send)
             return
 
         cached = await self.store.get(key)

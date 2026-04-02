@@ -38,9 +38,10 @@ class RoutingMiddleware:
         if static_hosts:
             for host in static_hosts:
                 if "*" in host:
-                    # Convert wildcard pattern to regex
+                    # Convert wildcard pattern to regex — use [^.]+ to match
+                    # exactly one subdomain level, not arbitrary depth
                     regex_pattern = (
-                        "^" + host.replace(".", "\\.").replace("*", ".*") + "$"
+                        "^" + host.replace(".", "\\.").replace("*", "[^.]+") + "$"
                     )
                     self.pattern_hosts[re.compile(regex_pattern)] = True
                 else:
