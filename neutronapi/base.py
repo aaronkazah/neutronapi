@@ -696,7 +696,7 @@ class API:
         """Checks if the request should be throttled."""
         for throttle_class in throttle_classes:
             throttle = throttle_class()
-            if not await throttle.allow_request(scope, "some_rate"):
+            if not await throttle.allow_request(scope):
                 wait_time = await throttle.wait()
                 raise exceptions.Throttled(wait=wait_time)
 
