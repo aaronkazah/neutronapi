@@ -178,6 +178,7 @@ class Endpoint:
     summary: Optional[str] = None
     tags: Optional[List[str]] = None
     request_schema: Optional[JsonSchemaDict] = None
+    request_content_type: Optional[str] = None
     response_schema: Optional[JsonSchemaDict] = None
     responses: Optional[Dict[int, JsonSchemaDict]] = None
     parameters: Optional[List[Dict[str, Any]]] = None
@@ -353,6 +354,7 @@ class API:
         description: Optional[str] = None,
         tags: Optional[List[str]] = None,
         request_schema: Optional[JsonSchemaDict] = None,
+        request_content_type: Optional[str] = None,
         response_schema: Optional[JsonSchemaDict] = None,
         responses: Optional[Dict[int, JsonSchemaDict]] = None,
         parameters: Optional[List[Dict[str, Any]]] = None,
@@ -380,6 +382,7 @@ class API:
             description: Detailed description (defaults to function docstring)
             tags: List of tags for grouping operations
             request_schema: JSON schema for request body validation
+            request_content_type: Request body content type (defaults to application/json)
             response_schema: JSON schema for successful response
             responses: Dict mapping status codes to response schemas
             parameters: List of parameter definitions for query/path params
@@ -484,6 +487,7 @@ class API:
                 summary=summary,
                 tags=tags,
                 request_schema=request_schema,
+                request_content_type=request_content_type,
                 response_schema=response_schema,
                 responses=responses,
                 parameters=parameters,

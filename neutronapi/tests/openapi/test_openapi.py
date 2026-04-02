@@ -159,6 +159,75 @@ class MetadataAPI(API):
         return await self.response({"id": item_id, "object": "meta", "value": "ok"})
 
 
+class UploadAPI(API):
+    resource = "/v1/uploads"
+    name = "uploads"
+
+    @API.endpoint(
+        "/",
+        methods=["POST"],
+        name="create",
+        request_schema={
+            "type": "object",
+            "required": ["file"],
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The file to upload.",
+                    "x-docs": {"tags": ["Beta"]},
+                }
+            },
+        },
+        request_content_type="multipart/form-data",
+        response_schema={
+            "type": "object",
+            "required": ["id", "object"],
+            "properties": {
+                "id": {"type": "string"},
+                "object": {
+                    "type": "string",
+                    "x-docs": {"expandable": True},
+                },
+            },
+        },
+    )
+    async def create_upload(self, scope, receive, send, **kwargs):
+        return await self.response({"id": "upl_123", "object": "upload"})
+
+
+class CreatedAPI(API):
+    resource = "/v1/created"
+    name = "created"
+
+    @API.endpoint(
+        "/",
+        methods=["POST"],
+        name="create",
+        response_schema={
+            "type": "object",
+            "properties": {"id": {"type": "string"}},
+            "required": ["id"],
+        },
+        responses={
+            201: {
+                "description": "Created",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"id": {"type": "string"}},
+                            "required": ["id"],
+                        }
+                    }
+                },
+            }
+        },
+    )
+    async def create_resource(self, scope, receive, send, **kwargs):
+        return await self.response({"id": "created_123"})
+
+
 class TestOpenAPI(unittest.IsolatedAsyncioTestCase):
     async def test_generate_from_api(self):
         gen = OpenAPIGenerator(title="Test", description="D", version="1.0.0")
@@ -441,3 +510,55 @@ class TestOpenAPI(unittest.IsolatedAsyncioTestCase):
             ],
             ["id", "object", "value"],
         )
+
+    async def test_request_content_type_defaults_to_json(self):
+        """Request schemas should default to application/json when no content type is set."""
+        gen = OpenAPIGenerator(title="Test Meta", version="1.0.0")
+        spec = await gen.generate_from_api(MetadataAPI())
+
+        create_post = spec["paths"]["/v1/meta/{item_id}"]["post"]
+        self.assertIn("application/json", create_post["requestBody"]["content"])
+
+    async def test_request_content_type_override(self):
+        """Request schemas should respect a custom request content type."""
+        gen = OpenAPIGenerator(title="Test Uploads", version="1.0.0")
+        spec = await gen.generate_from_api(UploadAPI())
+
+        create_post = spec["paths"]["/v1/uploads/"]["post"]
+        self.assertIn("multipart/form-data", create_post["requestBody"]["content"])
+        self.assertNotIn("application/json", create_post["requestBody"]["content"])
+
+    async def test_request_schema_preserves_x_docs_extensions(self):
+        """Vendor schema extensions should survive request schema emission."""
+        gen = OpenAPIGenerator(title="Test Uploads", version="1.0.0")
+        spec = await gen.generate_from_api(UploadAPI())
+
+        request_schema = spec["paths"]["/v1/uploads/"]["post"]["requestBody"][
+            "content"
+        ]["multipart/form-data"]["schema"]
+        self.assertEqual(
+            request_schema["properties"]["file"]["x-docs"],
+            {"tags": ["Beta"]},
+        )
+
+    async def test_response_schema_preserves_x_docs_extensions(self):
+        """Vendor schema extensions should survive response schema emission."""
+        gen = OpenAPIGenerator(title="Test Uploads", version="1.0.0")
+        spec = await gen.generate_from_api(UploadAPI())
+
+        response_schema = spec["paths"]["/v1/uploads/"]["post"]["responses"]["200"][
+            "content"
+        ]["application/json"]["schema"]
+        self.assertEqual(
+            response_schema["properties"]["object"]["x-docs"],
+            {"expandable": True},
+        )
+
+    async def test_custom_success_status_does_not_add_fake_200(self):
+        """Endpoints with explicit 2xx responses should not get an extra synthetic 200."""
+        gen = OpenAPIGenerator(title="Test Created", version="1.0.0")
+        spec = await gen.generate_from_api(CreatedAPI())
+
+        responses = spec["paths"]["/v1/created/"]["post"]["responses"]
+        self.assertIn("201", responses)
+        self.assertNotIn("200", responses)

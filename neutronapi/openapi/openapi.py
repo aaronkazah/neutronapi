@@ -436,10 +436,13 @@ class OpenAPIGenerator:
     ) -> Dict[str, Any]:
         """Get responses from endpoint metadata or auto-generate."""
         if endpoint_metadata and endpoint_metadata.responses:
-            # Use custom responses but ensure 200 response exists
+            # Use custom responses and only synthesize a success response when none is provided.
             responses = endpoint_metadata.responses.copy()
-            if 200 not in responses:
-                # Add default 200 response
+            has_success_response = any(
+                isinstance(status_code, int) and 200 <= status_code < 300
+                for status_code in responses
+            )
+            if not has_success_response:
                 schema = endpoint_metadata.response_schema or self._get_response_schema(
                     api, handler, method, operation_name
                 )
@@ -471,11 +474,12 @@ class OpenAPIGenerator:
     ) -> Optional[Dict[str, Any]]:
         """Get request body from endpoint metadata or auto-generate."""
         if endpoint_metadata and endpoint_metadata.request_schema:
+            content_type = (
+                endpoint_metadata.request_content_type or "application/json"
+            )
             return {
                 "required": True,
-                "content": {
-                    "application/json": {"schema": endpoint_metadata.request_schema}
-                },
+                "content": {content_type: {"schema": endpoint_metadata.request_schema}},
             }
         return self._generate_request_body(api, None)
 
