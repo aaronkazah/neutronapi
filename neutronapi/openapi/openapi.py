@@ -232,30 +232,16 @@ class OpenAPIGenerator:
 
         # Process all routes
         for route_info in api.routes:
-            if len(route_info) == 9:
-                (
-                    pattern,
-                    handler,
-                    methods,
-                    permission_classes,
-                    throttle_classes,
-                    name,
-                    original_path,
-                    skip_body_parsing,
-                    route_authentication_class,
-                ) = route_info
-            else:
-                (
-                    pattern,
-                    handler,
-                    methods,
-                    permission_classes,
-                    throttle_classes,
-                    name,
-                    original_path,
-                    skip_body_parsing,
-                ) = route_info
-                route_authentication_class = None
+            (
+                pattern,
+                handler,
+                methods,
+                permission_classes,
+                throttle_classes,
+                name,
+                original_path,
+                route_authentication_class,
+            ) = route_info
 
             effective_auth = (
                 route_authentication_class
@@ -506,9 +492,7 @@ class OpenAPIGenerator:
     def _get_request_body(
         self, api: API, method: str, endpoint_metadata
     ) -> Optional[Dict[str, Any]]:
-        """Get request body from endpoint metadata or auto-generate."""
-        if endpoint_metadata and endpoint_metadata.skip_body_parsing:
-            return None
+        """Get request body from endpoint metadata."""
         if endpoint_metadata and endpoint_metadata.request_schema:
             content_type = (
                 endpoint_metadata.request_content_type or "application/json"
@@ -517,7 +501,7 @@ class OpenAPIGenerator:
                 "required": True,
                 "content": {content_type: {"schema": endpoint_metadata.request_schema}},
             }
-        return self._generate_request_body(api, None)
+        return None
 
     def _convert_path_to_openapi(self, path: str) -> str:
         """Convert path parameters to OpenAPI format."""
@@ -759,26 +743,6 @@ class OpenAPIGenerator:
             if candidate and candidate.lower().startswith("list"):
                 return True
         return False
-
-    def _generate_request_body(
-        self, api: API, handler: callable
-    ) -> Optional[Dict[str, Any]]:
-        """Generate request body definition."""
-        if hasattr(api, "request_schema") and api.request_schema:
-            return {
-                "required": True,
-                "content": {"application/json": {"schema": api.request_schema}},
-            }
-
-        # Default request body
-        return {
-            "required": True,
-            "content": {
-                "application/json": {
-                    "schema": {"type": "object", "additionalProperties": True}
-                }
-            },
-        }
 
     def _add_security_scheme(self, auth_class: Any) -> None:
         """Add security scheme based on authentication class."""

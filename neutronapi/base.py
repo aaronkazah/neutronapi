@@ -185,8 +185,6 @@ class Endpoint:
     deprecated: bool = False
     # Documentation control
     include_in_docs: bool = True
-    # Body parsing control
-    skip_body_parsing: bool = False
 
 
 class API:
@@ -384,8 +382,6 @@ class API:
         deprecated: bool = False,
         # Documentation control
         include_in_docs: bool = True,
-        # Body parsing control
-        skip_body_parsing: bool = False,
         # Body size limit override (bytes); None uses API-level MAX_BODY_SIZE
         max_body_size: Optional[int] = None,
     ) -> Callable:
@@ -518,8 +514,6 @@ class API:
                 parameters=parameters,
                 deprecated=deprecated,
                 include_in_docs=include_in_docs,
-                # Body parsing control
-                skip_body_parsing=skip_body_parsing,
             )
             # Attach extra endpoint metadata for middlewares/parsers
             wrapper._endpoint_middlewares = middlewares or []
@@ -696,7 +690,6 @@ class API:
                 permission_classes=metadata.permission_classes,
                 throttle_classes=metadata.throttle_classes,
                 name=metadata.name,
-                skip_body_parsing=metadata.skip_body_parsing,
             )
 
         # Register websockets
@@ -719,7 +712,6 @@ class API:
                     ws_throttle_classes,
                     None,
                     path,
-                    False,  # skip_body_parsing not applicable for websockets
                     ws_auth_class,  # route-level auth override
                 )
             )
@@ -733,7 +725,6 @@ class API:
         permission_classes: Optional[List[Any]] = None,
         throttle_classes: Optional[List[Any]] = None,
         name: Optional[str] = None,
-        skip_body_parsing: bool = False,
     ) -> None:
         """Adds a new route to the API."""
         if methods is None:
@@ -755,7 +746,6 @@ class API:
                 throttle_classes or self.throttle_classes,
                 name,
                 path,
-                skip_body_parsing,
                 authentication_class,  # route-level auth override (None = use API-level)
             )
         )
@@ -832,7 +822,6 @@ class API:
                 throttle_classes,
                 _,
                 _,
-                skip_body_parsing,
                 route_authentication_class,
             ) = await self.match(path, method)
 
@@ -865,7 +854,7 @@ class API:
             from neutronapi.parsers import JSONParser, BaseParser
             headers_dict = dict(scope.get("headers", []))
             raw_body = b""
-            if method in ["POST", "PUT", "PATCH"] and not skip_body_parsing:
+            if method in ["POST", "PUT", "PATCH"]:
                 # Read complete body once, enforcing size limit
                 msg = await receive()
                 if msg.get("type") == "http.request":
@@ -892,7 +881,7 @@ class API:
             endpoint_parsers = list(getattr(handler, "_endpoint_parsers", []) or [])
 
             parsed_kwargs = {}
-            if method in ["POST", "PUT", "PATCH"] and not skip_body_parsing:
+            if method in ["POST", "PUT", "PATCH"]:
                 # Select parser: first matching endpoint parser; else default JSONParser()
                 parser = None
                 for p in endpoint_parsers:
@@ -955,7 +944,6 @@ class API:
                 throttle_classes,
                 _,
                 _,
-                _,
                 route_authentication_class,
             ) = await self.match(path, "WEBSOCKET")
         except exceptions.NotFound:
@@ -992,7 +980,6 @@ class API:
             throttle_classes,
             name,
             original_path,
-            skip_body_parsing,
             route_authentication_class,
         ) in self.routes:
             match = pattern.match(path)
@@ -1006,7 +993,6 @@ class API:
                         match,
                         name,
                         original_path,
-                        skip_body_parsing,
                         route_authentication_class,
                     )
                 )
@@ -1023,7 +1009,6 @@ class API:
             match,
             name,
             original_path,
-            skip_body_parsing,
             route_authentication_class,
         ) in matched_handlers:
             if method in allowed_methods:
@@ -1035,7 +1020,6 @@ class API:
                     throttle_classes,
                     name,
                     original_path,
-                    skip_body_parsing,
                     route_authentication_class,
                 )
 
@@ -1089,7 +1073,6 @@ class API:
             throttle_classes,
             route_name,
             original_path,
-            skip_body_parsing,
             _route_auth,
         ) in self.routes:
             if route_name == name:

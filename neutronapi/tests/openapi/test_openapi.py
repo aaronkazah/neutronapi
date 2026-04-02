@@ -205,7 +205,6 @@ class NoBodyActionAPI(API):
         "/trigger",
         methods=["POST"],
         name="trigger",
-        skip_body_parsing=True,
     )
     async def trigger(self, scope, receive, send, **kwargs):
         return await self.response({"ok": True})
@@ -578,8 +577,8 @@ class TestOpenAPI(unittest.IsolatedAsyncioTestCase):
         self.assertIn("201", responses)
         self.assertNotIn("200", responses)
 
-    async def test_skip_body_parsing_omits_request_body(self):
-        """No-body action endpoints should not emit a synthetic request body in OpenAPI."""
+    async def test_no_request_schema_omits_request_body(self):
+        """Endpoints without request_schema should not get a synthetic request body in OpenAPI."""
         gen = OpenAPIGenerator(title="Test Actions", version="1.0.0")
         spec = await gen.generate_from_api(NoBodyActionAPI())
 
