@@ -135,8 +135,9 @@ class TestCLIMigrationsIntegration(TestCase):
             cwd=os.getcwd(), capture_output=True, text=True
         )
 
-        if result.returncode != 0:
-            print('STDOUT:\n', result.stdout)
-            print('STDERR:\n', result.stderr)
-
-        self.assertEqual(result.returncode, 0, 'manage.py test should pass and apply migrations to Postgres test DB')
+        failure_output = f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"manage.py test should pass and apply migrations to Postgres test DB\n{failure_output}",
+        )

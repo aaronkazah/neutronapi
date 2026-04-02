@@ -347,7 +347,7 @@ class TestQuerySetMoreSQLite(unittest.IsolatedAsyncioTestCase):
             empty_results = list(empty_in_qs)
             self.assertEqual(len(empty_results), 0)
         except Exception as e:
-            print(f"Empty __in list caused error: {e}")
+            self.fail(f"Empty __in list caused error: {e}")
             
         # Test edge case: mixed types in the list (this should work)
         mixed_qs = await TestObject.objects.filter(

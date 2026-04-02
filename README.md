@@ -1,26 +1,19 @@
 # NeutronAPI
 
-**A modern, high-performance Python web framework built for async applications.**
+Async Python web framework for building APIs with first-class commands, models, migrations, background tasks, and ASGI support.
 
 Source: [github.com/aaronkazah/neutronapi](https://github.com/aaronkazah/neutronapi)
 
-NeutronAPI provides everything you need to build robust APIs quickly: universal dependency injection, comprehensive type support, database models with migrations, background tasks, and an intuitive command-line interface. Designed for performance, developer experience, and production readiness.
+## Install
 
-## Installation
-
-NeutronAPI now follows the same high-level workflow as Django’s documented `django-admin` / `manage.py` split:
-
-- [Django admin/manage.py reference](https://docs.djangoproject.com/en/6.0/ref/django-admin/)
-- [Django tutorial bootstrap flow](https://docs.djangoproject.com/en/6.0/intro/tutorial01/)
-
-### Package User Flow
+### Use the package
 
 ```bash
 pip install neutronapi
 python -m neutronapi --help
 ```
 
-### Framework Developer Flow
+### Work on the framework
 
 ```bash
 python3.12 -m venv venv
@@ -32,228 +25,183 @@ python -m neutronapi --help
 ## Quick Start
 
 ```bash
-# 1. Create a project
 neutronapi startproject blog
 cd blog
-
-# 2. Validate the scaffold
 python manage.py check
-
-# 3. Start the server
 python manage.py start --no-reload
+```
 
-# 4. Create an app scaffold
+Create an app:
+
+```bash
 python manage.py startapp posts
+```
 
-# 5. Wire apps.posts.api into apps/entry.py, then re-run checks
+Add your API in `apps/posts/api.py`:
+
+```python
+from neutronapi.base import API, endpoint
+
+
+class PostAPI(API):
+    resource = "/posts"
+    name = "posts"
+
+    @endpoint("/", methods=["GET"], name="list")
+    async def list_posts(self, scope, receive, send, **kwargs):
+        return await self.response(
+            [
+                {"id": "post_1", "title": "Hello"},
+            ]
+        )
+```
+
+Register it in `apps/entry.py`:
+
+```python
+from neutronapi.application import Application
+from apps.posts.api import PostAPI
+
+
+app = Application(
+    apis=[
+        PostAPI(),
+    ],
+)
+```
+
+Then verify and run:
+
+```bash
 python manage.py check
+python manage.py test
+python manage.py start --no-reload
+```
 
-# 6. Run tests
+## Project Layout
+
+```text
+myproject/
+├── manage.py
+└── apps/
+    ├── __init__.py
+    ├── settings.py
+    ├── entry.py
+    └── posts/
+        ├── __init__.py
+        ├── api.py
+        ├── models.py
+        ├── commands/
+        ├── migrations/
+        └── tests/
+```
+
+## Core Commands
+
+```bash
+python -m neutronapi --help
+neutronapi startproject blog
+python manage.py check
+python manage.py start
+python manage.py startapp posts
+python manage.py makemigrations
+python manage.py migrate
 python manage.py test
 ```
 
-## Getting Started Tutorial
+Test database selection:
 
-**1. Create Project**
 ```bash
-neutronapi startproject blog
-cd blog
-python manage.py check
+python manage.py test
+python manage.py test --database sqlite
+python manage.py test --database postgres
 ```
 
-**2. Start the generated app immediately**
-```bash
-python manage.py start --no-reload
-# Visit: http://127.0.0.1:8000/
-```
+`auto` is the default:
+- in the NeutronAPI source tree it uses SQLite
+- in a real project it uses `DATABASES["default"]`
 
-**3. Create App Module**
-```bash
-python manage.py startapp posts
-```
+## Settings
 
-`startapp` creates the app scaffold under `apps/posts`, but it does not silently rewrite `apps/entry.py`. That wiring stays explicit, and `python manage.py check` will warn until you register the new API.
+Minimal `apps/settings.py`:
 
-**4. Generated `apps/settings.py`**
 ```python
 import os
 from pathlib import Path
 
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+ENTRY = "apps.entry:app"
 
-# ASGI application entry point (required for server)
-ENTRY = "apps.entry:app"  # module:variable format
-
-# Database
 DATABASES = {
     "default": {
         "ENGINE": "aiosqlite",
         "NAME": ":memory:" if os.getenv("TESTING") == "1" else BASE_DIR / "db.sqlite3",
     }
 }
+
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-key-change-me")
+DEBUG = os.getenv("DEBUG", "true").lower() == "true"
+ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
 ```
 
-**5. Generated `apps/posts/api.py`**
+## Endpoints
+
+Use the decorator aliases directly:
+
 ```python
-from neutronapi.base import API
+from neutronapi.base import API, endpoint, websocket
 
-class PostAPI(API):
-    resource = "/posts"
-    name = "posts"
 
-    @API.endpoint("/", methods=["GET"], name="list")
-    async def list_posts(self, scope, receive, send, **kwargs):
-        return await self.response([])
+class HelloAPI(API):
+    resource = "/hello"
+    name = "hello"
+
+    @endpoint("/", methods=["GET"], name="home")
+    async def home(self, scope, receive, send, **kwargs):
+        return await self.response({"message": "Hello from NeutronAPI"})
+
+    @websocket("/stream")
+    async def stream(self, scope, receive, send, **kwargs):
+        await send({"type": "websocket.accept"})
+        await send({"type": "websocket.send", "text": "connected"})
+        await send({"type": "websocket.close", "code": 1000})
 ```
 
-**6. Register the new API in `apps/entry.py`**
+## Models and Migrations
+
 ```python
-from neutronapi.application import Application
-from neutronapi.middleware.compression import CompressionMiddleware
-from neutronapi.middleware.allowed_hosts import AllowedHostsMiddleware
-from apps.posts.api import PostAPI
+from neutronapi.db.fields import CharField, TextField
+from neutronapi.db.models import Model
 
-app = Application(
-    apis=[
-        PostAPI(),
-    ],
-    middlewares=[
-        AllowedHostsMiddleware(allowed_hosts=["localhost", "127.0.0.1"]),
-        CompressionMiddleware(minimum_size=512),
-    ],
-)
+
+class Post(Model):
+    title = CharField(max_length=255)
+    body = TextField(null=True)
 ```
 
-**7. Re-run checks and tests**
+Generate and apply migrations:
+
 ```bash
-python manage.py check
-python manage.py test
-python manage.py start --no-reload
-# Visit: http://127.0.0.1:8000/posts
+python manage.py makemigrations
+python manage.py migrate
 ```
 
-## Universal Registry System
+## Logging and Request IDs
 
-The registry provides clean dependency injection with namespaced keys:
-
-```python
-from neutronapi.application import Application
-
-# Register dependencies with namespace:name pattern
-app = Application(
-    registry={
-        'utils:logger': Logger(),
-        'utils:cache': RedisCache(),
-        'services:email': EmailService(), 
-        'services:database': DatabaseService(),
-        'modules:auth': AuthModule(),
-    }
-)
-
-# Access in APIs
-class UserAPI(API):
-    @API.endpoint("/register", methods=["POST"])
-    async def register(self, scope, receive, send, **kwargs):
-        # Type-safe access with IDE support
-        logger = self.registry.get('utils:logger')
-        email = self.registry.get('services:email')
-        
-        logger.info("User registration started")
-        await email.send_welcome_email(user_data)
-        
-        return await self.response({"status": "registered"})
-
-# Dynamic registration
-app.register('utils:metrics', MetricsCollector())
-app.register('services:payment', PaymentProcessor())
-
-# Registry utilities
-print(app.list_registry_keys())  # All keys
-print(app.list_registry_keys('utils'))  # Just utils namespace
-print(app.has_registry_item('services:email'))  # True
-```
-
-## Comprehensive Type Support
-
-NeutronAPI includes full type hints with IDE integration:
-
-```python
-from typing import Dict, List, Optional
-from neutronapi.base import API, Response, endpoint
-from neutronapi.application import Application
-
-class TypedAPI(API):
-    resource = "/api"
-    
-    @endpoint("/users", methods=["GET"])
-    async def get_users(self, scope: Dict[str, Any], receive, send) -> Response:
-        # Full type support with autocomplete
-        cache: CacheService = self.registry.get('services:cache')
-        users: List[Dict[str, str]] = cache.get('users') or []
-        
-        return await self.response(users)
-
-# Type-safe registry access
-def get_typed_dependency[T](app: Application, key: str) -> Optional[T]:
-    return app.get_registry_item(key)
-
-logger = get_typed_dependency[Logger](app, 'utils:logger')
-```
-
-## Project Structure
-
-```
-myproject/
-├── manage.py           # Management commands
-├── apps/
-│   ├── __init__.py
-│   ├── settings.py     # Configuration 
-│   └── entry.py        # ASGI application
-└── db.sqlite3          # Database
-```
-
-## Background Tasks
-
-```python
-from neutronapi.background import Task, TaskFrequency
-from neutronapi.base import API, endpoint
-from neutronapi.application import Application
-
-class CleanupTask(Task):
-    name = "cleanup"
-    frequency = TaskFrequency.MINUTELY
-    
-    async def run(self, **kwargs):
-        print("Cleaning up logs...")
-
-class PingAPI(API):
-    resource = "/ping"
-    
-    @endpoint("/", methods=["GET"])
-    async def ping(self, scope, receive, send, **kwargs):
-        return await self.response({"status": "ok"})
-
-# Add to application  
-app = Application(
-    apis=[PingAPI()],
-    tasks={"cleanup": CleanupTask()}
-)
-```
-
-## Logging
-
-NeutronAPI uses the standard `logging` module under the `neutronapi.*` namespace.
+NeutronAPI logs under the `neutronapi.*` namespace.
 
 ```python
 from neutronapi.logging import configure_logging, get_logger
 
+
 configure_logging(level="INFO", fmt="json")
 
 logger = get_logger(__name__)
-logger.info("framework booted")
+logger.info("application booted")
 ```
 
-You can also configure logging from settings:
+You can also configure logging from `apps/settings.py`:
 
 ```python
 LOGGING = {
@@ -262,42 +210,32 @@ LOGGING = {
 }
 ```
 
-Every HTTP request gets a generated `X-Request-Id` header, and request lifecycle events are emitted through the built-in event bus.
+Every HTTP response gets `X-Request-Id`.
 
-## Events and Request IDs
+## Events
 
 ```python
 from neutronapi.event_bus import events
 
+
 @events.on("request.completed")
 async def on_request(event):
     print(event.request_id, event.path, event.status)
-
-async def stream_requests():
-    stream = events.subscribe("request.*")
-    try:
-        async for event in stream:
-            print(event.event, event.request_id)
-    finally:
-        await stream.close()
 ```
-
-Request IDs are attached to `scope["request_id"]` for handlers and middleware, and NeutronAPI injects `X-Request-Id` into every HTTP response automatically.
 
 ## Throttling
 
-Define throttle classes by subclassing `BaseThrottle`:
-
 ```python
-from neutronapi.base import API
+from neutronapi.base import API, endpoint
 from neutronapi.throttling import BaseThrottle
+
 
 class RateThrottle(BaseThrottle):
     async def allow_request(self, scope: dict) -> bool:
         return True
 
-    async def wait(self) -> int:
-        return 60
+    async def wait(self) -> int | None:
+        return None
 
     async def get_headers(self) -> dict[str, str]:
         return {
@@ -306,129 +244,65 @@ class RateThrottle(BaseThrottle):
             "X-RateLimit-Reset": "1717200000",
         }
 
-class MyAPI(API):
+
+class ItemAPI(API):
     resource = "/items"
     name = "items"
 
-    @API.endpoint("/", methods=["POST"], throttle_classes=[RateThrottle])
+    @endpoint("/", methods=["POST"], throttle_classes=[RateThrottle])
     async def create_item(self, scope, receive, send, **kwargs):
         return await self.response({"ok": True})
 ```
 
-Successful responses and `429 Too Many Requests` responses both include throttle headers. Throttled responses also include `Retry-After` and `retry_after` in the JSON body.
+Throttle headers are included on normal responses and `429` responses. Throttled responses also include `Retry-After`.
 
 ## Idempotency
-
-NeutronAPI ships an idempotency middleware and a process-local in-memory store for development or single-process deployments:
 
 ```python
 from neutronapi.application import Application
 from neutronapi.idempotency import IdempotencyMiddleware, InMemoryIdempotencyStore
 
+
 app = Application(
-    apis=[OrdersAPI()],
+    apis=[PostAPI()],
     middlewares=[
         IdempotencyMiddleware(store=InMemoryIdempotencyStore(), ttl=86400),
     ],
 )
 ```
 
-For production, implement `IdempotencyStore` against shared storage such as Redis. Replayed responses include `Idempotency-Key` and `Idempotent-Replayed: true`.
+Replay responses include:
+- `Idempotency-Key`
+- `Idempotent-Replayed: true`
 
-## Database Models
-
-```python
-from neutronapi.db.models import Model
-from neutronapi.db.fields import CharField, IntegerField, DateTimeField
-
-class User(Model):
-    name = CharField(max_length=100)
-    age = IntegerField()
-    created_at = DateTimeField(auto_now_add=True)
-```
-
-## Server Commands
-
-```bash
-# Development (auto-reload, localhost)
-python manage.py start
-
-# Production (multi-worker, optimized)  
-python manage.py start --production
-
-# Custom configuration
-python manage.py start --host 0.0.0.0 --port 8080 --workers 4
-```
-
-## Testing
-
-```bash
-# Auto: sqlite in the NeutronAPI source tree, project DATABASES["default"] elsewhere
-python manage.py test
-
-# Force SQLite
-python manage.py test --database sqlite
-
-# Force PostgreSQL
-python manage.py test --database postgres
-
-# Specific tests
-python manage.py test app.tests.test_models.TestUser.test_creation
-
-# Dev tooling (only neutronapi/ is targeted)
-black neutronapi
-flake8 neutronapi
-```
-
-## Database Features
-
-### Models & ORM
-```python
-from neutronapi.db.models import Model
-from neutronapi.db.fields import CharField, IntegerField, DateTimeField
-
-class Post(Model):
-    title = CharField(max_length=200)
-    content = TextField()
-    created_at = DateTimeField(auto_now_add=True)
-
-# Basic queries
-await Post.objects.all()
-await Post.objects.filter(title="My Post")
-await Post.objects.create(title="New Post", content="...")
-```
-
-### Full-Text Search
-```python
-# Search across text fields
-await Post.objects.search("python framework")
-
-# Field-specific search
-await Post.objects.filter(content__search="database")
-
-# Ranked results (PostgreSQL/SQLite FTS5)
-await Post.objects.search("api").order_by_rank()
-```
-
-Supports PostgreSQL native FTS and SQLite FTS5 with automatic fallback to LIKE queries.
-
-
-## Commands
-
-```bash
-python manage.py start              # Start server
-python manage.py test               # Run tests  
-python manage.py migrate            # Run migrations
-python manage.py startapp posts     # Create new app
-```
-
-### Custom Commands
-
-Create custom management commands by adding them to your app's `commands` directory:
+## Background Tasks
 
 ```python
-# apps/blog/commands/greet.py
+from neutronapi.application import Application
+from neutronapi.background import Task, TaskFrequency
+
+
+class CleanupTask(Task):
+    name = "cleanup"
+    frequency = TaskFrequency.HOURLY
+
+    async def run(self, **kwargs):
+        return None
+
+
+app = Application(
+    apis=[PostAPI()],
+    tasks={"cleanup": CleanupTask()},
+)
+```
+
+## Custom Commands
+
+Create `apps/posts/commands/greet.py`:
+
+```python
 from typing import List
+
 
 class Command:
     def __init__(self):
@@ -439,200 +313,20 @@ class Command:
         print(f"Hello, {name}!")
 ```
 
-Run with:
+Run it:
+
 ```bash
-python manage.py greet Alice    # Hello, Alice!
-python manage.py greet --help   # Shows: Greet a user
+python manage.py greet Alice
+python manage.py greet --help
 ```
 
-Commands are automatically discovered from any `apps/*/commands/*.py` files that contain a `Command` class.
+## Development
 
-## Middlewares
+Run the framework test suite from the repo root:
 
-```python
-from neutronapi.middleware.compression import CompressionMiddleware
-from neutronapi.middleware.allowed_hosts import AllowedHostsMiddleware
-
-app = Application(
-    apis=[PostAPI()],
-    middlewares=[
-        AllowedHostsMiddleware(allowed_hosts=["localhost", "yourdomain.com"]),
-        CompressionMiddleware(minimum_size=512),  # Compress responses > 512 bytes
-    ]
-)
-
-# Endpoint-level middleware
-@endpoint("/upload", methods=["POST"], middlewares=[AuthMiddleware()])
-async def upload_file(self, scope, receive, send, **kwargs):
-    # This endpoint has auth middleware
-    pass
-```
-
-## Parsers
-
-```python
-from neutronapi.parsers import FormParser, MultiPartParser, BinaryParser
-
-# Default: JSON parser
-@endpoint("/api/data", methods=["POST"])
-async def json_data(self, scope, receive, send, **kwargs):
-    data = kwargs["body"]  # Parsed JSON dict
-    return await self.response({"received": data})
-
-# Custom parsers
-@endpoint("/upload", methods=["POST"], parsers=[MultiPartParser(), FormParser()])
-async def upload_file(self, scope, receive, send, **kwargs):
-    files = kwargs["files"]  # Uploaded files
-    form_data = kwargs["form"]  # Form fields
-    return await self.response({"status": "uploaded"})
-```
-
-## Advanced Registry Usage
-
-```python
-from neutronapi.application import Application
-from typing import Protocol
-
-# Define interfaces for better type safety
-class EmailServiceProtocol(Protocol):
-    async def send(self, to: str, subject: str, body: str) -> None: ...
-
-class MetricsProtocol(Protocol):
-    def increment(self, metric: str) -> None: ...
-
-# Implementation
-class SMTPEmailService:
-    async def send(self, to: str, subject: str, body: str) -> None:
-        # SMTP implementation
-        pass
-
-class PrometheusMetrics:
-    def increment(self, metric: str) -> None:
-        # Prometheus implementation
-        pass
-
-# Register with clear namespacing
-app = Application(
-    registry={
-        'services:email': SMTPEmailService(),
-        'services:metrics': PrometheusMetrics(),
-        'utils:logger': StructuredLogger(),
-        'modules:auth': JWTAuthModule(),
-    }
-)
-
-# Usage with type safety
-class OrderAPI(API):
-    @endpoint("/orders", methods=["POST"])
-    async def create_order(self, scope, receive, send, **kwargs):
-        email: EmailServiceProtocol = self.registry.get('services:email')
-        metrics: MetricsProtocol = self.registry.get('services:metrics')
-        
-        # Your business logic here
-        metrics.increment('orders.created')
-        await email.send('user@example.com', 'Order Confirmed', 'Thanks!')
-        
-        return await self.response({"status": "created"})
-```
-
-## Error Handling
-
-```python
-from neutronapi.api.exceptions import ValidationError, NotFound, APIException
-
-@endpoint("/users/<int:user_id>", methods=["GET"])
-async def get_user(self, scope, receive, send, **kwargs):
-    user_id = kwargs["user_id"]
-    
-    if not user_id:
-        raise ValidationError("User ID is required")
-    
-    user = await get_user_from_db(user_id)
-    if not user:
-        raise NotFound("User not found")
-    
-    return await self.response(user)
-
-# Custom exceptions
-class BusinessLogicError(APIException):
-    status_code = 422
-    
-    def __init__(self, message: str = "Business logic error"):
-        super().__init__(message, type="business_error")
-```
-
-### Exception Organization
-
-Exceptions are organized by module:
-
-```python
-# Module-specific exceptions
-from neutronapi.api.exceptions import APIException, ValidationError, NotFound
-from neutronapi.db.exceptions import DoesNotExist, MigrationError, IntegrityError
-from neutronapi.authentication.exceptions import AuthenticationFailed
-from neutronapi.middleware.exceptions import RouteNotFound, MethodNotAllowed
-from neutronapi.openapi.exceptions import InvalidSchemaError
-
-# Generic framework exceptions
-from neutronapi.exceptions import ImproperlyConfigured, ValidationError, ObjectDoesNotExist
-```
-
-## OpenAPI Documentation
-
-Automatically generate OpenAPI 3.0 specifications from your APIs:
-
-```python
-from neutronapi.openapi.openapi import OpenAPIGenerator
-
-# Basic API - automatically discovered
-class UserAPI(API):
-    resource = "/v1/users"
-    name = "users"
-    
-    @API.endpoint("/", methods=["GET"], name="list")
-    async def list_users(self, scope, receive, send, **kwargs):
-        return await self.response({"users": []})
-
-# Internal/debug API - hidden by default
-class DebugAPI(API):
-    resource = "/debug"
-    name = "debug" 
-    hidden = True  # Excluded from docs by default
-    
-    @API.endpoint("/status", methods=["GET"], name="status")
-    async def debug_status(self, scope, receive, send, **kwargs):
-        return await self.response({"debug": True})
-
-# Generate public API docs (excludes hidden APIs)
-async def generate_public_docs():
-    apis = {"users": UserAPI(), "debug": DebugAPI()}
-    
-    generator = OpenAPIGenerator(title="My API", version="1.0.0")
-    spec = await generator.generate(source=apis)
-    # Result: Only includes /v1/users endpoints
-    
-# Generate complete docs (includes everything)
-async def generate_complete_docs():
-    apis = {"users": UserAPI(), "debug": DebugAPI()}
-    
-    generator = OpenAPIGenerator(
-        title="Complete API",
-        include_all=True  # Include hidden APIs and private endpoints
-    )
-    spec = await generator.generate(source=apis)
-    # Result: Includes both /v1/users and /debug endpoints
-
-# Exclude specific patterns
-async def generate_filtered_docs():
-    apis = {"users": UserAPI(), "debug": DebugAPI()}
-    
-    generator = OpenAPIGenerator(
-        title="Filtered API",
-        exclude_patterns=["/debug/*", "/internal/*"]
-    )
-    spec = await generator.generate(source=apis)
-
-# Convenience function for all endpoints
-from neutronapi.openapi.openapi import generate_all_endpoints_openapi
-spec = await generate_all_endpoints_openapi(apis, title="All Endpoints")
+```bash
+source venv/bin/activate
+python manage.py test
+python manage.py test --database sqlite
+python manage.py test --database postgres
 ```

@@ -27,7 +27,6 @@ class TestWebSocketConcurrent(unittest.IsolatedAsyncioTestCase):
             @API.websocket("/connect")
             async def connect(self, scope, receive, send, **kwargs):
                 conn_id = scope.get("query_string", b"").decode()
-                print(f"[WS] Connection {conn_id} started")
                 connection_order.append(f"start_{conn_id}")
                 active_connections.append(conn_id)
 
@@ -43,7 +42,6 @@ class TestWebSocketConcurrent(unittest.IsolatedAsyncioTestCase):
 
                 active_connections.remove(conn_id)
                 connection_order.append(f"end_{conn_id}")
-                print(f"[WS] Connection {conn_id} ended")
                 await send({"type": "websocket.close", "code": 1000})
 
         app = Application(apis=[SocketAPI()])
@@ -69,16 +67,12 @@ class TestWebSocketConcurrent(unittest.IsolatedAsyncioTestCase):
             return messages
 
         # Run 5 concurrent connections
-        print("\n[TEST] Starting 5 concurrent WebSocket connections...")
         tasks = [
             asyncio.create_task(simulate_connection(f"conn_{i}"))
             for i in range(5)
         ]
 
         results = await asyncio.gather(*tasks)
-
-        print(f"[TEST] Connection order: {connection_order}")
-        print(f"[TEST] Results: {len(results)} connections completed")
 
         # Verify all connections completed successfully
         self.assertEqual(len(results), 5)
@@ -98,14 +92,9 @@ class TestWebSocketConcurrent(unittest.IsolatedAsyncioTestCase):
         starts = [x for x in connection_order if x.startswith("start_")]
         ends = [x for x in connection_order if x.startswith("end_")]
 
-        print(f"[TEST] Starts: {starts}")
-        print(f"[TEST] Ends: {ends}")
-
         # Check that connections overlapped (at least some starts happened before some ends)
         first_end_idx = connection_order.index(ends[0]) if ends else len(connection_order)
         starts_before_first_end = sum(1 for x in connection_order[:first_end_idx] if x.startswith("start_"))
-
-        print(f"[TEST] Starts before first end: {starts_before_first_end}")
 
         # If truly concurrent, multiple connections should start before the first one ends
         self.assertGreater(starts_before_first_end, 1,

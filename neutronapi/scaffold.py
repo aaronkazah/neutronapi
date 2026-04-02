@@ -122,14 +122,14 @@ def render_project_files(project_name: str) -> Dict[str, str]:
         f"""\
         \"\"\"ASGI entrypoint for the {project_name} project.\"\"\"
         from neutronapi.application import Application
-        from neutronapi.base import API
+        from neutronapi.base import API, endpoint
 
 
         class MainAPI(API):
             resource = ""
             name = "main"
 
-            @API.endpoint("/", methods=["GET"], name="home")
+            @endpoint("/", methods=["GET"], name="home")
             async def home(self, scope, receive, send, **kwargs):
                 return await self.response({{"message": "Hello from {project_name}!"}})
 
@@ -159,14 +159,14 @@ def render_app_files(app_name: str) -> Dict[str, str]:
 
     api_py = textwrap.dedent(
         f"""\
-        from neutronapi.base import API
+        from neutronapi.base import API, endpoint
 
 
         class {api_name}(API):
             resource = "{resource}"
             name = "{app_name}"
 
-            @API.endpoint("/", methods=["GET"], name="list")
+            @endpoint("/", methods=["GET"], name="list")
             async def list_items(self, scope, receive, send, **kwargs):
                 return await self.response([])
         """

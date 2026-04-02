@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import fnmatch
+import logging
 import os
 import re
 import shutil
@@ -775,8 +776,14 @@ class Command:
 
         cov = None
         exit_code = 0
+        quiet_mode = verbosity == 0
+        neutronapi_logger = logging.getLogger("neutronapi")
+        previous_neutronapi_level = neutronapi_logger.level
 
         try:
+            if quiet_mode:
+                neutronapi_logger.setLevel(logging.WARNING)
+
             selected_database = await self._configure_database_mode(options.database, verbosity)
             await self._apply_project_migrations()
             await self._bootstrap_test_models()
@@ -792,8 +799,6 @@ class Command:
                         print(f"Warning: coverage not started: {exc}")
 
             if debug_sql:
-                import logging
-
                 logging.getLogger("neutronapi.db").setLevel(logging.DEBUG)
 
             loader = unittest.TestLoader()
@@ -825,7 +830,7 @@ class Command:
             runner = unittest.TextTestRunner(
                 verbosity=verbosity,
                 stream=stream,
-                buffer=False,
+                buffer=quiet_mode,
                 failfast=failfast,
             )
 
@@ -931,6 +936,7 @@ class Command:
                 await asyncio.wait_for(self._teardown_postgres(), timeout=3.0)
             except (asyncio.TimeoutError, Exception):
                 pass
+            neutronapi_logger.setLevel(previous_neutronapi_level)
 
         return exit_code
 

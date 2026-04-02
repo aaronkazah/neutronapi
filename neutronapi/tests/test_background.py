@@ -25,7 +25,6 @@ class CounterTask(Task):
     async def run(self, **kwargs):
         self.counter['count'] += 1
         self.counter['last_run'] = datetime.now()
-        print(f"Task {self.name} ran - count is now {self.counter['count']}")
 
 
 class TestBackgroundTaskExecution(unittest.IsolatedAsyncioTestCase):
