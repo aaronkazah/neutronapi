@@ -234,18 +234,15 @@ class TestFields(unittest.TestCase):
         assert isinstance(python_value, Decimal)
         assert python_value == Decimal("123.45")
 
-        # Test comparison operators
-        field1 = DecimalField()
-        field1.value = Decimal("100.50")
-        field2 = DecimalField()
-        field2.value = Decimal("100.50")
-        assert field1 == field2
+        # Decimal values are compared at the Python level, not on field descriptors.
+        # Verify round-trip preserves equality.
+        v1 = field.from_db(field.to_db(Decimal("100.50")))
+        v2 = field.from_db(field.to_db(Decimal("100.50")))
+        assert v1 == v2
 
-        # Test inequality
-        field3 = DecimalField()
-        field3.value = Decimal("99.99")
-        assert field1 > field3
-        assert field3 < field1
+        v3 = field.from_db(field.to_db(Decimal("99.99")))
+        assert v1 > v3
+        assert v3 < v1
 
 
 class TestMigrations(unittest.TestCase):

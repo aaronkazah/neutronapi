@@ -11,6 +11,99 @@ except Exception:  # pragma: no cover
 from neutronapi import exceptions
 
 
+class ComparableFieldMixin:
+    """Mixin providing comparison operators for numeric/datetime fields.
+
+    Subclasses set ``_comparable_types`` to a tuple of accepted Python types.
+    Comparisons work on the raw Python value held by the model instance,
+    NOT on a shared ``self.value`` attribute.
+    """
+
+    _comparable_types: tuple = ()
+
+    def _cmp_value(self, other):
+        if isinstance(other, BaseField):
+            raise TypeError("Cannot compare field descriptors directly — compare model attribute values instead")
+        return other
+
+    def __eq__(self, other):
+        if isinstance(other, (*self._comparable_types, type(self))):
+            return NotImplemented  # fall back to default object equality for field-to-field
+        return NotImplemented
+
+    def __ne__(self, other):
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return result
+        return not result
+
+    def __lt__(self, other):
+        return NotImplemented
+
+    def __le__(self, other):
+        return NotImplemented
+
+    def __gt__(self, other):
+        return NotImplemented
+
+    def __ge__(self, other):
+        return NotImplemented
+
+
+class StringFieldMixin:
+    """Mixin providing string-like methods for text fields.
+
+    These delegate to ``str(self)`` which subclasses define.
+    Model instance attributes are plain ``str`` values; these methods
+    exist for the rare case where a field descriptor is used directly.
+    """
+
+    def __len__(self):
+        return len(str(self))
+
+    def __contains__(self, item):
+        return item in str(self)
+
+    def __getitem__(self, key):
+        return str(self)[key]
+
+    def __add__(self, other):
+        return str(self) + str(other)
+
+    def __radd__(self, other):
+        return str(other) + str(self)
+
+    def lower(self):
+        return str(self).lower()
+
+    def upper(self):
+        return str(self).upper()
+
+    def strip(self, chars=None):
+        return str(self).strip(chars)
+
+    def lstrip(self, chars=None):
+        return str(self).lstrip(chars)
+
+    def rstrip(self, chars=None):
+        return str(self).rstrip(chars)
+
+    def split(self, sep=None, maxsplit=-1):
+        return str(self).split(sep, maxsplit)
+
+    def rsplit(self, sep=None, maxsplit=-1):
+        return str(self).rsplit(sep, maxsplit)
+
+    def replace(self, old, new, count=-1):
+        return str(self).replace(old, new, count)
+
+    def startswith(self, prefix, start=None, end=None):
+        return str(self).startswith(prefix, start, end)
+
+    def endswith(self, suffix, start=None, end=None):
+        return str(self).endswith(suffix, start, end)
+
+
 class BaseField:
     def __init__(
         self,
@@ -22,13 +115,12 @@ class BaseField:
         blank=False,
         primary_key=False,
     ):
-        self._name = None  # Add this to store the field name
+        self._name = None
         self.db_column = db_column
         self.null = null
         self.blank = blank
         self.default = default
         self.max_length = max_length
-        self.value = None
         self.unique = unique
         self.primary_key = primary_key
 
@@ -64,30 +156,15 @@ class BaseField:
             )
 
     def __repr__(self):
-        if self.value is None:
-            return ""
-        if isinstance(self.value, datetime.datetime):
-            return self.value.isoformat()
-        if isinstance(self.value, (int, float)):
-            return str(self.value)
-        return str(self.value)
+        return f"<{self.__class__.__name__} '{self._name or '?'}'>"
 
     def __str__(self):
-        if self.value is None:
-            return ""
-        if isinstance(self.value, datetime.datetime):
-            return self.value.isoformat()
-        if isinstance(self.value, (int, float)):
-            return str(self.value)
-        return str(self.value)
+        return f"<{self.__class__.__name__} '{self._name or '?'}'>"
 
     def to_db(self, value=None):
-        if isinstance(value, BaseField):
-            value = value.value
         return value
 
     def from_db(self, value):
-        self.value = value
         return value
 
     def describe(self):
@@ -123,50 +200,6 @@ class DateTimeField(BaseField):
             null=null,
             default=default,
         )
-        if self.default is not None:
-            self.value = self.default() if callable(self.default) else self.default
-
-    def __eq__(self, other):
-        if isinstance(other, (DateTimeField, datetime.datetime)):
-            if isinstance(other, DateTimeField):
-                return self.value == other.value
-            return self.value == other
-        return False
-
-    def __ne__(self, other):
-        if isinstance(other, (DateTimeField, datetime.datetime)):
-            if isinstance(other, DateTimeField):
-                return self.value != other.value
-            return self.value != other
-        return True
-
-    def __lt__(self, other):
-        if isinstance(other, (DateTimeField, datetime.datetime)):
-            if isinstance(other, DateTimeField):
-                return self.value < other.value
-            return self.value < other
-        return False
-
-    def __le__(self, other):
-        if isinstance(other, (DateTimeField, datetime.datetime)):
-            if isinstance(other, DateTimeField):
-                return self.value <= other.value
-            return self.value <= other
-        return False
-
-    def __gt__(self, other):
-        if isinstance(other, (DateTimeField, datetime.datetime)):
-            if isinstance(other, DateTimeField):
-                return self.value > other.value
-            return self.value > other
-        return False
-
-    def __ge__(self, other):
-        if isinstance(other, (DateTimeField, datetime.datetime)):
-            if isinstance(other, DateTimeField):
-                return self.value >= other.value
-            return self.value >= other
-        return False
 
     def describe(self):
         """Returns a string representation of the field with its parameters"""
@@ -202,8 +235,6 @@ class DateTimeField(BaseField):
                 raise ValueError("Expected a datetime instance or ISO format string")
 
     def to_db(self, value=None):
-        if isinstance(value, BaseField):
-            value = value.value
         if value is None:
             if not self.null:
                 raise ValueError("DateTimeField cannot be null.")
@@ -211,7 +242,6 @@ class DateTimeField(BaseField):
         if callable(value):
             value = value()
 
-        # Convert string to datetime if needed
         if isinstance(value, str):
             try:
                 value = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -221,8 +251,6 @@ class DateTimeField(BaseField):
         if not isinstance(value, datetime.datetime):
             raise ValueError("Expected a datetime instance")
 
-        self.value = value
-        # Return the datetime object directly - PostgreSQL needs datetime objects, not strings
         return value
 
     def from_db(self, value):
@@ -231,20 +259,15 @@ class DateTimeField(BaseField):
         if isinstance(value, datetime.datetime):
             return value
         try:
-            dt = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
-            self.value = dt
-            return dt
+            return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             raise ValueError(f"Invalid datetime format: {value}")
 
     def get_db_type(self):
         return "TEXT"
 
-    def isoformat(self):
-        return self.value.isoformat()
 
-
-class CharField(BaseField):
+class CharField(StringFieldMixin, BaseField):
     def __init__(
         self,
         max_length=None,
@@ -266,30 +289,21 @@ class CharField(BaseField):
         )
 
     def to_db(self, value=None):
-        """Convert value to database format without truncation."""
-        if isinstance(value, BaseField):
-            value = value.value
         if value is None:
             return None
-        # Store the full value - let the database handle any truncation
-        self.value = str(value)
-        return self.value
+        return str(value)
 
     def from_db(self, value):
-        """Read value from database without modification."""
         if value is None:
-            self.value = None
             return None
-        self.value = str(value)
-        return self.value
+        return str(value)
 
     def __str__(self):
-        return str(self.value) if self.value is not None else ""
+        return ""
 
     def __repr__(self):
-        return self.__str__()
+        return ""
 
-    # String operations
     def __eq__(self, other):
         if isinstance(other, (CharField, str)):
             return str(self) == str(other)
@@ -297,52 +311,6 @@ class CharField(BaseField):
 
     def __ne__(self, other):
         return not self.__eq__(other)
-
-    def __len__(self):
-        return len(str(self))
-
-    def __contains__(self, item):
-        return item in str(self)
-
-    def __getitem__(self, key):
-        return str(self)[key]
-
-    def __add__(self, other):
-        return str(self) + str(other)
-
-    def __radd__(self, other):
-        return str(other) + str(self)
-
-    # String methods
-    def lower(self):
-        return str(self).lower()
-
-    def upper(self):
-        return str(self).upper()
-
-    def strip(self, chars=None):
-        return str(self).strip(chars)
-
-    def lstrip(self, chars=None):
-        return str(self).lstrip(chars)
-
-    def rstrip(self, chars=None):
-        return str(self).rstrip(chars)
-
-    def split(self, sep=None, maxsplit=-1):
-        return str(self).split(sep, maxsplit)
-
-    def rsplit(self, sep=None, maxsplit=-1):
-        return str(self).rsplit(sep, maxsplit)
-
-    def replace(self, old, new, count=-1):
-        return str(self).replace(old, new, count)
-
-    def startswith(self, prefix, start=None, end=None):
-        return str(self).startswith(prefix, start, end)
-
-    def endswith(self, suffix, start=None, end=None):
-        return str(self).endswith(suffix, start, end)
 
     def describe(self):
         """Returns a string representation of the field with its parameters"""
@@ -364,7 +332,7 @@ class CharField(BaseField):
         return f"VARCHAR({self.max_length})"
 
 
-class TextField(BaseField):
+class TextField(StringFieldMixin, BaseField):
     def __init__(
         self,
         db_column=None,
@@ -385,12 +353,11 @@ class TextField(BaseField):
         )
 
     def __str__(self):
-        return str(self.value) if self.value is not None else ""
+        return ""
 
     def __repr__(self):
-        return repr(self.value) if self.value is not None else ""
+        return ""
 
-    # String operations
     def __eq__(self, other):
         if isinstance(other, (TextField, str)):
             return str(self) == str(other)
@@ -398,52 +365,6 @@ class TextField(BaseField):
 
     def __ne__(self, other):
         return not self.__eq__(other)
-
-    def __len__(self):
-        return len(str(self))
-
-    def __contains__(self, item):
-        return item in str(self)
-
-    def __getitem__(self, key):
-        return str(self)[key]
-
-    def __add__(self, other):
-        return str(self) + str(other)
-
-    def __radd__(self, other):
-        return str(other) + str(self)
-
-    # String methods
-    def lower(self):
-        return str(self).lower()
-
-    def upper(self):
-        return str(self).upper()
-
-    def strip(self, chars=None):
-        return str(self).strip(chars)
-
-    def lstrip(self, chars=None):
-        return str(self).lstrip(chars)
-
-    def rstrip(self, chars=None):
-        return str(self).rstrip(chars)
-
-    def split(self, sep=None, maxsplit=-1):
-        return str(self).split(sep, maxsplit)
-
-    def rsplit(self, sep=None, maxsplit=-1):
-        return str(self).rsplit(sep, maxsplit)
-
-    def replace(self, old, new, count=-1):
-        return str(self).replace(old, new, count)
-
-    def startswith(self, prefix, start=None, end=None):
-        return str(self).startswith(prefix, start, end)
-
-    def endswith(self, suffix, start=None, end=None):
-        return str(self).endswith(suffix, start, end)
 
     def describe(self):
         """Returns a string representation of the field with its parameters"""
@@ -504,8 +425,6 @@ class EnumField(BaseField):
                 )
 
     def to_db(self, value=None):
-        if isinstance(value, BaseField):
-            value = value.value
         if value is None:
             return None
         return value.value if isinstance(value, Enum) else value
@@ -528,48 +447,6 @@ class EnumField(BaseField):
 
 
 class IntegerField(BaseField):
-    def __eq__(self, other):
-        if isinstance(other, (IntegerField, int)):
-            if isinstance(other, IntegerField):
-                return self.value == other.value
-            return self.value == other
-        return False
-
-    def __ne__(self, other):
-        if isinstance(other, (IntegerField, int)):
-            if isinstance(other, IntegerField):
-                return self.value != other.value
-            return self.value != other
-        return True
-
-    def __lt__(self, other):
-        if isinstance(other, (IntegerField, int)):
-            if isinstance(other, IntegerField):
-                return self.value < other.value
-            return self.value < other
-        return False
-
-    def __le__(self, other):
-        if isinstance(other, (IntegerField, int)):
-            if isinstance(other, IntegerField):
-                return self.value <= other.value
-            return self.value <= other
-        return False
-
-    def __gt__(self, other):
-        if isinstance(other, (IntegerField, int)):
-            if isinstance(other, IntegerField):
-                return self.value > other.value
-            return self.value > other
-        return False
-
-    def __ge__(self, other):
-        if isinstance(other, (IntegerField, int)):
-            if isinstance(other, IntegerField):
-                return self.value >= other.value
-            return self.value >= other
-        return False
-
     def validate(self, value):
         if not self.null and value is None:
             raise ValueError("IntegerField cannot be null.")
@@ -580,8 +457,6 @@ class IntegerField(BaseField):
                 raise ValueError("Invalid integer value")
 
     def to_db(self, value=None):
-        if isinstance(value, BaseField):
-            value = value.value
         if value is None:
             return None
         return int(value)
@@ -628,23 +503,9 @@ class BooleanField(BaseField):
             raise ValueError("BooleanField cannot be null.")
 
     def to_db(self, value):
-        """Convert boolean to database format, respecting database type differences."""
-        if isinstance(value, BaseField):
-            value = value.value
-
         if value is None:
             return None
-
-        # Convert to boolean first (handle "truthy" values)
-        bool_value = bool(value)
-
-        # Store the boolean value
-        self.value = bool_value
-
-        # For SQLite, integers are used for booleans
-        # For PostgreSQL, native boolean values are used
-        # Let the database adapter handle the conversion
-        return bool_value
+        return bool(value)
 
     def from_db(self, value):
         """Convert from database format to Python boolean."""
@@ -660,48 +521,6 @@ class BooleanField(BaseField):
 
 
 class FloatField(BaseField):
-    def __eq__(self, other):
-        if isinstance(other, (FloatField, float, int)):
-            if isinstance(other, FloatField):
-                return self.value == other.value
-            return self.value == other
-        return False
-
-    def __ne__(self, other):
-        if isinstance(other, (FloatField, float, int)):
-            if isinstance(other, FloatField):
-                return self.value != other.value
-            return self.value != other
-        return True
-
-    def __lt__(self, other):
-        if isinstance(other, (FloatField, float, int)):
-            if isinstance(other, FloatField):
-                return self.value < other.value
-            return self.value < other
-        return False
-
-    def __le__(self, other):
-        if isinstance(other, (FloatField, float, int)):
-            if isinstance(other, FloatField):
-                return self.value <= other.value
-            return self.value <= other
-        return False
-
-    def __gt__(self, other):
-        if isinstance(other, (FloatField, float, int)):
-            if isinstance(other, FloatField):
-                return self.value > other.value
-            return self.value > other
-        return False
-
-    def __ge__(self, other):
-        if isinstance(other, (FloatField, float, int)):
-            if isinstance(other, FloatField):
-                return self.value >= other.value
-            return self.value >= other
-        return False
-
     def validate(self, value):
         if not self.null and value is None:
             raise ValueError("FloatField cannot be null.")
@@ -712,8 +531,6 @@ class FloatField(BaseField):
                 raise ValueError("Invalid float value")
 
     def to_db(self, value=None):
-        if isinstance(value, BaseField):
-            value = value.value
         if value is None:
             return None
         return float(value)
@@ -747,48 +564,6 @@ class DecimalField(BaseField):
         self.max_digits = max_digits
         self.decimal_places = decimal_places
 
-    def __eq__(self, other):
-        if isinstance(other, (DecimalField, Decimal, int, float)):
-            if isinstance(other, DecimalField):
-                return self.value == other.value
-            return self.value == other
-        return False
-
-    def __ne__(self, other):
-        if isinstance(other, (DecimalField, Decimal, int, float)):
-            if isinstance(other, DecimalField):
-                return self.value != other.value
-            return self.value != other
-        return True
-
-    def __lt__(self, other):
-        if isinstance(other, (DecimalField, Decimal, int, float)):
-            if isinstance(other, DecimalField):
-                return self.value < other.value
-            return self.value < other
-        return False
-
-    def __le__(self, other):
-        if isinstance(other, (DecimalField, Decimal, int, float)):
-            if isinstance(other, DecimalField):
-                return self.value <= other.value
-            return self.value <= other
-        return False
-
-    def __gt__(self, other):
-        if isinstance(other, (DecimalField, Decimal, int, float)):
-            if isinstance(other, DecimalField):
-                return self.value > other.value
-            return self.value > other
-        return False
-
-    def __ge__(self, other):
-        if isinstance(other, (DecimalField, Decimal, int, float)):
-            if isinstance(other, DecimalField):
-                return self.value >= other.value
-            return self.value >= other
-        return False
-
     def validate(self, value):
         super().validate(value)
         if not self.null and value is None:
@@ -816,16 +591,10 @@ class DecimalField(BaseField):
                     )
 
     def to_db(self, value=None):
-        if isinstance(value, BaseField):
-            value = value.value
         if value is None:
             return None
         try:
-            decimal_value = Decimal(str(value))
-            self.value = decimal_value
-            # Return string for SQLite compatibility (TEXT storage)
-            # PostgreSQL's NUMERIC type will handle string conversion automatically
-            return str(decimal_value)
+            return str(Decimal(str(value)))
         except (InvalidOperation, ValueError, TypeError):
             raise ValueError(f"Invalid decimal value: {value}")
 
@@ -833,9 +602,7 @@ class DecimalField(BaseField):
         if value is None:
             return None
         try:
-            decimal_value = Decimal(str(value))
-            self.value = decimal_value
-            return decimal_value
+            return Decimal(str(value))
         except (InvalidOperation, ValueError, TypeError):
             return None
 
@@ -872,62 +639,30 @@ class JSONField(BaseField):
         )
 
     def to_db(self, value: Union[dict, list] = None) -> Optional[str]:
-        """Convert Python object to database JSON format."""
         if value is None:
             return None
-
-        # Handle instances of BaseField
-        if isinstance(value, BaseField):
-            value = value.value
-
-        # Convert dictionary, list, or callable
         if isinstance(value, (dict, list)):
-            self.value = value
             return json.dumps(value)
-        elif callable(value):
-            self.value = value()
-            return json.dumps(self.value)
-        else:
-            # Try to serialize other types, if possible
-            try:
-                return json.dumps(value)
-            except (TypeError, ValueError):
-                raise exceptions.ValidationError(
-                    f"Invalid value type for JSONField: {type(value)}"
-                )
+        if callable(value):
+            return json.dumps(value())
+        try:
+            return json.dumps(value)
+        except (TypeError, ValueError):
+            raise exceptions.ValidationError(
+                f"Invalid value type for JSONField: {type(value)}"
+            )
 
     def from_db(self, value=None) -> Any:
-        """Convert database JSON value to Python object."""
         if value is None:
             return None
-
-        # PostgreSQL drivers often return already-parsed objects
         if isinstance(value, (dict, list)):
-            self.value = value
             return value
-
-        # SQLite returns JSON as strings that need to be parsed
         if isinstance(value, str):
             try:
-                self.value = json.loads(value)
-                return self.value
+                return json.loads(value)
             except json.JSONDecodeError:
-                # If it can't be decoded as JSON, return as is
-                self.value = value
                 return value
-
-        # Otherwise just return the value
-        self.value = value
         return value
-
-    def get(self, param, param1) -> Any:
-        return self.value.get(param, param1)
-
-    def __getitem__(self, key) -> Any:
-        return self.value[key]
-
-    def __setitem__(self, key, value) -> None:
-        self.value[key] = value
 
     def get_db_type(self):
         # This is used by SQLite
@@ -986,8 +721,6 @@ class VectorField(BaseField):
     def to_db(self, value):
         if np is None:
             raise ImportError("numpy is required for VectorField operations")
-        if isinstance(value, BaseField):
-            value = value.value
         if value is None:
             return None
         if isinstance(value, np.ndarray):
@@ -1038,8 +771,6 @@ class BinaryField(BaseField):
         return f"BinaryField({', '.join(params)})"
 
     def to_db(self, value):
-        if isinstance(value, BaseField):
-            value = value.value
         if value is None:
             return None
         if isinstance(value, bytes):
