@@ -79,7 +79,7 @@ class TaskResult:
 class Background:
     """Manages periodic task execution."""
 
-    def __init__(self, *, poll_interval: float = 0.25) -> None:
+    def __init__(self, *, poll_interval: float = 0.25, max_results: int = 1000) -> None:
         """Initialize background task scheduler."""
         if poll_interval <= 0:
             raise ValueError("poll_interval must be greater than 0")
@@ -88,6 +88,7 @@ class Background:
         self._task: Optional[asyncio.Task] = None
         self.logger = logging.getLogger(__name__)
         self.poll_interval = poll_interval
+        self.max_results = max_results
         self._results: Dict[str, TaskResult] = {}
 
     def register_task(self, task: Task) -> str:
@@ -134,13 +135,13 @@ class Background:
         self,
         func: Callable[..., Awaitable[Any]],
         *args,
-        priority: TaskPriority = TaskPriority.NORMAL,  # Priority argument will be ignored for now
+        priority: TaskPriority = TaskPriority.NORMAL,
         **kwargs,
     ) -> str:
-        """
-        Run a one-time task asynchronously.
+        """Run a one-time task asynchronously.
+
         Returns a task_id that can be used to check the result later.
-        MODIFIED: This now dispatches the task for immediate execution, bypassing queues.
+        The task is dispatched for immediate concurrent execution.
         """
         task_id = str(uuid.uuid4())
         task_config = TaskConfig(
@@ -149,16 +150,11 @@ class Background:
             func=func,
             args=args,
             kwargs=kwargs,
-            priority=priority,  # Stored in config, but not used for queuing in this modified version
+            priority=priority,
             task_id=task_id,
         )
-        # Directly create an asyncio task for _execute_task.
-        # This makes it run concurrently without waiting for a queue worker.
         asyncio.create_task(self._execute_task(task_config))
-
-        self.logger.info(
-            f"Immediately dispatched async task {task_id} ({task_config.name}) for concurrent execution."
-        )
+        self.logger.info(f"Dispatched async task {task_id} ({task_config.name})")
 
         return task_id
 
@@ -205,7 +201,7 @@ class Background:
             next_run = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         elif frequency == TaskFrequency.WEEKLY:
             next_run = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            days_ahead = (7 - next_run.weekday()) % 7
+            days_ahead = (7 - next_run.weekday()) % 7 or 7
             next_run += timedelta(days=days_ahead)
         elif frequency == TaskFrequency.MONTHLY:
             if now.month == 12:
@@ -255,6 +251,11 @@ class Background:
 
         result.end_time = datetime.now(timezone.utc)
         self._results[task.task_id] = result
+
+        # Evict oldest results when limit exceeded to prevent unbounded memory growth
+        while len(self._results) > self.max_results:
+            oldest_key = next(iter(self._results))
+            del self._results[oldest_key]
 
         return result
 
