@@ -240,6 +240,101 @@ app = Application(
 )
 ```
 
+## Logging
+
+NeutronAPI uses the standard `logging` module under the `neutronapi.*` namespace.
+
+```python
+from neutronapi.logging import configure_logging, get_logger
+
+configure_logging(level="INFO", fmt="json")
+
+logger = get_logger(__name__)
+logger.info("framework booted")
+```
+
+You can also configure logging from settings:
+
+```python
+LOGGING = {
+    "level": "INFO",
+    "format": "json",
+}
+```
+
+Every HTTP request gets a generated `X-Request-Id` header, and request lifecycle events are emitted through the built-in event bus.
+
+## Events and Request IDs
+
+```python
+from neutronapi.event_bus import events
+
+@events.on("request.completed")
+async def on_request(event):
+    print(event.request_id, event.path, event.status)
+
+async def stream_requests():
+    stream = events.subscribe("request.*")
+    try:
+        async for event in stream:
+            print(event.event, event.request_id)
+    finally:
+        await stream.close()
+```
+
+Request IDs are attached to `scope["request_id"]` for handlers and middleware, and NeutronAPI injects `X-Request-Id` into every HTTP response automatically.
+
+## Throttling
+
+Define throttle classes by subclassing `BaseThrottle`:
+
+```python
+from neutronapi.base import API
+from neutronapi.throttling import BaseThrottle
+
+class RateThrottle(BaseThrottle):
+    async def allow_request(self, scope: dict) -> bool:
+        return True
+
+    async def wait(self) -> int:
+        return 60
+
+    async def get_headers(self) -> dict[str, str]:
+        return {
+            "X-RateLimit-Limit": "100",
+            "X-RateLimit-Remaining": "99",
+            "X-RateLimit-Reset": "1717200000",
+        }
+
+class MyAPI(API):
+    resource = "/items"
+    name = "items"
+
+    @API.endpoint("/", methods=["POST"], throttle_classes=[RateThrottle])
+    async def create_item(self, scope, receive, send, **kwargs):
+        return await self.response({"ok": True})
+```
+
+Successful responses and `429 Too Many Requests` responses both include throttle headers. Throttled responses also include `Retry-After` and `retry_after` in the JSON body.
+
+## Idempotency
+
+NeutronAPI ships an idempotency middleware and a process-local in-memory store for development or single-process deployments:
+
+```python
+from neutronapi.application import Application
+from neutronapi.idempotency import IdempotencyMiddleware, InMemoryIdempotencyStore
+
+app = Application(
+    apis=[OrdersAPI()],
+    middlewares=[
+        IdempotencyMiddleware(store=InMemoryIdempotencyStore(), ttl=86400),
+    ],
+)
+```
+
+For production, implement `IdempotencyStore` against shared storage such as Redis. Replayed responses include `Idempotency-Key` and `Idempotent-Replayed: true`.
+
 ## Database Models
 
 ```python
@@ -268,8 +363,14 @@ python manage.py start --host 0.0.0.0 --port 8080 --workers 4
 ## Testing
 
 ```bash
-# SQLite (default)
+# Auto: sqlite in the NeutronAPI source tree, project DATABASES["default"] elsewhere
 python manage.py test
+
+# Force SQLite
+python manage.py test --database sqlite
+
+# Force PostgreSQL
+python manage.py test --database postgres
 
 # Specific tests
 python manage.py test app.tests.test_models.TestUser.test_creation

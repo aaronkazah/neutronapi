@@ -39,6 +39,55 @@ Send = Callable[[Dict[str, Any]], None]
 logger = logging.getLogger(__name__)
 
 
+def _merge_headers(
+    existing: List[Tuple[bytes, bytes]],
+    extra: List[Tuple[bytes, bytes]],
+) -> List[Tuple[bytes, bytes]]:
+    if not extra:
+        return list(existing)
+
+    overrides: Dict[bytes, Tuple[bytes, bytes]] = {
+        name.lower(): (name, value)
+        for name, value in extra
+    }
+    merged = [
+        (name, value)
+        for name, value in existing
+        if name.lower() not in overrides
+    ]
+    merged.extend(overrides.values())
+    return merged
+
+
+def _header_tuples_from_mapping(headers: Dict[str, str]) -> List[Tuple[bytes, bytes]]:
+    return [
+        (name.lower().encode("utf-8"), str(value).encode("utf-8"))
+        for name, value in headers.items()
+    ]
+
+
+def _append_scope_headers(scope: Scope, headers: List[Tuple[bytes, bytes]]) -> None:
+    if not headers:
+        return
+    current = list(scope.get("_response_headers", []))
+    scope["_response_headers"] = _merge_headers(current, headers)
+
+
+def _wrap_send_with_scope_headers(scope: Scope, send: Send) -> Send:
+    async def wrapped(message: Dict[str, Any]) -> None:
+        if message.get("type") == "http.response.start":
+            message = {
+                **message,
+                "headers": _merge_headers(
+                    list(message.get("headers", [])),
+                    list(scope.get("_response_headers", [])),
+                ),
+            }
+        await send(message)
+
+    return wrapped
+
+
 class Response:
     """HTTP Response handler for API responses.
     
@@ -694,11 +743,17 @@ class API:
     @staticmethod
     async def check_throttles(scope, throttle_classes):
         """Checks if the request should be throttled."""
+        collected_headers: Dict[str, str] = {}
         for throttle_class in throttle_classes:
             throttle = throttle_class()
-            if not await throttle.allow_request(scope):
+            allowed = await throttle.allow_request(scope)
+            headers = await throttle.get_headers()
+            if headers:
+                collected_headers.update({str(key): str(value) for key, value in headers.items()})
+                _append_scope_headers(scope, _header_tuples_from_mapping(collected_headers))
+            if not allowed:
                 wait_time = await throttle.wait()
-                raise exceptions.Throttled(wait=wait_time)
+                raise exceptions.Throttled(wait=wait_time, headers=dict(collected_headers))
 
     async def handle(
         self, scope: Scope, receive: Receive, send: Send, **kwargs
@@ -710,6 +765,7 @@ class API:
 
         try:
             scope = await self._process_client_params(scope)
+            send_with_headers = _wrap_send_with_scope_headers(scope, send)
             method = scope["method"]
             path = scope["path"].rstrip("/")
 
@@ -759,9 +815,7 @@ class API:
                         more = msg.get("more_body", False)
 
             # Endpoint-specific parsers
-            endpoint_parsers = []
-            if hasattr(handler, '_endpoint_parsers'):
-                endpoint_parsers = list(getattr(handler, '_endpoint_parsers') or [])
+            endpoint_parsers = list(getattr(handler, "_endpoint_parsers", []) or [])
 
             parsed_kwargs = {}
             if method in ["POST", "PUT", "PATCH"]:
@@ -780,9 +834,7 @@ class API:
                 kwargs.update(parsed_kwargs)
 
             # Compose endpoint-level middlewares (instances only)
-            endpoint_mws = []
-            if hasattr(handler, '_endpoint_middlewares'):
-                endpoint_mws = list(getattr(handler, '_endpoint_middlewares') or [])
+            endpoint_mws = list(getattr(handler, "_endpoint_middlewares", []) or [])
 
             async def handler_app(scope2, receive2, send2):
                 response = await handler(scope2, receive2, send2, **kwargs)
@@ -802,15 +854,21 @@ class API:
                 app_to_call = mw
 
             # Call the composed endpoint app
-            await app_to_call(scope, receive, send)
+            await app_to_call(scope, receive, send_with_headers)
 
         except exceptions.APIException as e:
             # Unified API error shape
+            error_headers: List[Tuple[bytes, bytes]] = []
+            if isinstance(e, exceptions.Throttled):
+                if e.wait is not None:
+                    error_headers.append((b"retry-after", str(e.wait).encode("utf-8")))
+                error_headers.extend(_header_tuples_from_mapping(e.headers))
             response = Response(
                 body=e.to_dict(),
                 status_code=getattr(e, "status_code", 500),
+                headers=error_headers,
             )
-            return await response(scope, receive, send)
+            return await response(scope, receive, _wrap_send_with_scope_headers(scope, send))
 
     async def handle_websocket(
         self, scope: Scope, receive: Receive, send: Send, **kwargs

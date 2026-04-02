@@ -12,31 +12,6 @@ class TestSearchPostgres(unittest.IsolatedAsyncioTestCase):
         body = TextField(null=True)
 
     async def asyncSetUp(self):
-        from neutronapi.conf import settings
-        # Require Postgres engine
-        db_config = settings.DATABASES.get('default', {})
-        if db_config.get('ENGINE', '').lower() != 'asyncpg':
-            self.skipTest('PostgreSQL not configured in settings.DATABASES')
-
-        try:
-            import asyncpg
-        except Exception:
-            self.skipTest('asyncpg not installed')
-
-        # Verify server reachability
-        try:
-            conn0 = await asyncpg.connect(
-                host=db_config.get('HOST', 'localhost'),
-                port=db_config.get('PORT', 5432),
-                database='postgres',
-                user=db_config.get('USER', 'postgres'),
-                password=db_config.get('PASSWORD', 'postgres'),
-            )
-            await conn0.close()
-        except Exception:
-            self.skipTest('PostgreSQL server not reachable')
-
-        # Use existing settings.DATABASES configuration
         self.db_manager = setup_databases()
 
         # Create table via migrations

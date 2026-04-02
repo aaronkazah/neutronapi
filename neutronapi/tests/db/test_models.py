@@ -18,11 +18,10 @@ class TestModels(unittest.IsolatedAsyncioTestCase):
     
     async def asyncSetUp(self):
         """Set up test database before each test."""
-        provider = os.environ.get('DATABASE_PROVIDER', '').lower()
-        
-        if provider in ('asyncpg', 'postgres', 'postgresql'):
-            # Use the existing PostgreSQL test database setup
-            from neutronapi.conf import settings
+        from neutronapi.conf import settings
+
+        engine = settings.DATABASES.get('default', {}).get('ENGINE', '').lower()
+        if engine == 'asyncpg':
             self.db_manager = setup_databases()
         else:
             # Create temporary SQLite database for testing

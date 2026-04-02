@@ -2,7 +2,7 @@ import logging
 import unittest
 from io import StringIO
 
-from neutronapi.logging import get_logger, configure_logging, JSONFormatter
+from neutronapi.logging import EventFormatter, configure_logging, get_logger, log_event
 
 
 class TestGetLogger(unittest.TestCase):
@@ -51,7 +51,7 @@ class TestConfigureLogging(unittest.TestCase):
         self.assertEqual(len(root.handlers), 1)
 
 
-class TestJSONFormatter(unittest.TestCase):
+class TestEventFormatter(unittest.TestCase):
     def test_format_basic(self):
         record = logging.LogRecord(
             name="neutronapi.test",
@@ -62,8 +62,19 @@ class TestJSONFormatter(unittest.TestCase):
             args=(),
             exc_info=None,
         )
-        formatter = JSONFormatter()
+        formatter = EventFormatter()
         output = formatter.format(record)
-        self.assertIn('"msg"', output)
+        self.assertIn('"event"', output)
         self.assertIn("test message", output)
         self.assertIn('"ts"', output)
+
+    def test_log_event(self):
+        root = logging.getLogger("neutronapi")
+        root.handlers.clear()
+        buf = StringIO()
+        configure_logging(level="INFO", fmt="json", stream=buf)
+        logger = get_logger("structured")
+        log_event(logger, logging.INFO, "request.completed", request_id="req_123", status=200)
+        output = buf.getvalue()
+        self.assertIn('"request.completed"', output)
+        self.assertIn('"request_id"', output)

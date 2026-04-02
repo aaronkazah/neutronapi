@@ -1,7 +1,7 @@
 import unittest
 from neutronapi.db.models import Model
 from neutronapi.db.fields import CharField, JSONField
-from neutronapi.db.connection import get_databases
+from neutronapi.db.connection import get_databases, setup_databases
 
 
 class TestQuerySetPostgres(unittest.IsolatedAsyncioTestCase):
@@ -14,54 +14,27 @@ class TestQuerySetPostgres(unittest.IsolatedAsyncioTestCase):
             table_name = 'test_items_pg'
 
     async def asyncSetUp(self):
-        from neutronapi.conf import settings
-        # Require Postgres engine
-        db_config = settings.DATABASES.get('default', {})
-        if db_config.get('ENGINE', '').lower() != 'asyncpg':
-            self.skipTest('PostgreSQL not configured in settings.DATABASES')
-
-        try:
-            import asyncpg
-        except Exception:
-            self.skipTest('asyncpg not installed')
-
-        # Ensure test database exists and is reachable
-        test_db_name = db_config.get('NAME', 'neutronapi_test')
-        if not test_db_name.startswith('test_'):
-            test_db_name = f'test_{test_db_name}'
-            settings._settings['DATABASES']['default']['NAME'] = test_db_name
-
-        try:
-            admin_conn = await asyncpg.connect(
-                host=db_config.get('HOST', 'localhost'),
-                port=db_config.get('PORT', 5432),
-                database='postgres',
-                user=db_config.get('USER', 'postgres'),
-                password=db_config.get('PASSWORD', 'postgres'),
-            )
-            try:
-                await admin_conn.execute(f'CREATE DATABASE "{test_db_name}"')
-            finally:
-                await admin_conn.close()
-        except Exception:
-            # If we cannot reach server, skip
-            self.skipTest('PostgreSQL server not reachable')
-
-        # Connect and prepare table
+        self.db_manager = setup_databases()
         conn = await get_databases().get_connection('default')
         self.provider = conn.provider
+        schema, table = self.TestItem._get_parsed_table_name()
+        table_identifier = self.provider.get_table_identifier(schema, table)
+        await self.provider.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
         await self.provider.execute(f"""
-            CREATE TABLE IF NOT EXISTS {self.TestItem.get_table_name()} (
+            CREATE TABLE IF NOT EXISTS {table_identifier} (
                 id TEXT PRIMARY KEY,
                 name TEXT,
                 meta JSONB
             )
         """)
-        await self.provider.execute(f"DELETE FROM {self.TestItem.get_table_name()}")
+        await self.provider.execute(f"DELETE FROM {table_identifier}")
 
     async def asyncTearDown(self):
         # Clean up test table
-        await self.provider.execute(f"DROP TABLE IF EXISTS {self.TestItem.get_table_name()}")
+        schema, table = self.TestItem._get_parsed_table_name()
+        table_identifier = self.provider.get_table_identifier(schema, table)
+        await self.provider.execute(f"DROP TABLE IF EXISTS {table_identifier}")
+        await self.db_manager.close_all()
 
     async def test_queryset_pg(self):
         # Create test data using the model

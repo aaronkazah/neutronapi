@@ -5,8 +5,9 @@ import sys
 import tempfile
 import textwrap
 
-from unittest import TestCase, skipIf, skipUnless
-import shutil
+from unittest import TestCase
+
+from neutronapi.commands.test import tag
 
 
 class TestCLIMigrationsIntegration(TestCase):
@@ -121,65 +122,17 @@ class TestCLIMigrationsIntegration(TestCase):
         self.assertIn(app_label, discovered, 'Should discover migrations for the temp app')
         self.assertGreater(len(discovered[app_label]), 0, 'Temp app should have at least one migration file')
 
-    def _is_postgres_configured(self):
-        """Check if default database is PostgreSQL and reachable."""
-        try:
-            from neutronapi.conf import settings
-            import asyncio
-            import asyncpg
-            
-            db_config = settings.DATABASES.get('default', {})
-            if db_config.get('ENGINE', '').lower() != 'asyncpg':
-                return False
-
-            async def check_connection():
-                try:
-                    # Prefer configured DB; fall back to 'postgres' if it doesn't exist yet
-                    conn = await asyncpg.connect(
-                        host=db_config.get('HOST', 'localhost'),
-                        port=db_config.get('PORT', 5432),
-                        database=db_config.get('NAME', 'neutronapi_test'),
-                        user=db_config.get('USER', 'postgres'),
-                        password=db_config.get('PASSWORD', 'postgres'),
-                    )
-                    await conn.close()
-                    return True
-                except Exception:
-                    try:
-                        conn = await asyncpg.connect(
-                            host=db_config.get('HOST', 'localhost'),
-                            port=db_config.get('PORT', 5432),
-                            database='postgres',
-                            user=db_config.get('USER', 'postgres'),
-                            password=db_config.get('PASSWORD', 'postgres'),
-                        )
-                        await conn.close()
-                        return True
-                    except Exception:
-                        return False
-
-            return asyncio.run(check_connection())
-        except Exception:
-            return False
-
-    @skipIf(shutil.which('docker') is None, 'Docker not available for Postgres test')
+    @tag('postgres')
     def test_manage_py_test_applies_postgres_migrations(self):
-        if not self._is_postgres_configured():
-            self.skipTest('PostgreSQL not configured in settings.DATABASES')
-            
         app_label = 'tmpapp_pg'
         # For PostgreSQL, table is created in schema 'tmpapp_pg' with name 'dummy'
         table_name = f'{app_label}.dummy'
         self._create_tmp_app_with_migration(app_label)
         self._create_tmp_app_test(app_label, table_name)
 
-        env = os.environ.copy()
-        # Force Postgres default test settings in the subprocess when no apps/settings.py exists
-        env['DATABASE_PROVIDER'] = 'asyncpg'
-
         result = subprocess.run(
-            [sys.executable, 'manage.py', 'test', app_label, '-q'],
-            cwd=os.getcwd(), capture_output=True, text=True, env=env
+            [sys.executable, 'manage.py', 'test', app_label, '-q', '--database', 'postgres'],
+            cwd=os.getcwd(), capture_output=True, text=True
         )
 
         if result.returncode != 0:

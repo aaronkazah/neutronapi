@@ -2,6 +2,7 @@ import unittest
 import tempfile
 import os
 from unittest.mock import patch, Mock
+from neutronapi.commands.test import tag
 from neutronapi.db.models import Model
 from neutronapi.db.fields import CharField, TextField, IntegerField, BooleanField
 from neutronapi.db.connection import setup_databases
@@ -30,13 +31,10 @@ class TestMigrationsFieldRenames(unittest.IsolatedAsyncioTestCase):
                 'NAME': self.temp_db.name,
             }
         }
-        
-        # Test both SQLite and PostgreSQL if available
-        self.test_postgres = self._should_test_postgres()
-        
-        if self.test_postgres:
-            from neutronapi.conf import settings
-            self.postgres_config = settings.DATABASES.copy()
+
+        from neutronapi.conf import settings
+        engine = settings.DATABASES.get('default', {}).get('ENGINE', '').lower()
+        self.postgres_config = settings.DATABASES.copy() if engine == 'asyncpg' else None
 
     async def asyncTearDown(self):
         if hasattr(self, 'db_manager'):
@@ -47,19 +45,11 @@ class TestMigrationsFieldRenames(unittest.IsolatedAsyncioTestCase):
             except Exception:
                 pass
 
-    def _should_test_postgres(self):
-        """Check if PostgreSQL testing is available"""
-        try:
-            import asyncpg
-            from neutronapi.conf import settings
-            db_config = settings.DATABASES.get('default', {})
-            return db_config.get('ENGINE', '').lower() == 'asyncpg'
-        except:
-            return False
-
     async def _setup_database(self, use_postgres=False, model_suffix=""):
         """Setup database with appropriate configuration"""
-        if use_postgres and self.test_postgres:
+        if use_postgres:
+            if self.postgres_config is None:
+                raise RuntimeError("PostgreSQL rename tests require `python manage.py test --database postgres`.")
             self.db_manager = setup_databases(self.postgres_config)
         else:
             self.db_manager = setup_databases(self.sqlite_config)
@@ -251,11 +241,9 @@ class TestMigrationsFieldRenames(unittest.IsolatedAsyncioTestCase):
         row = await connection.fetch_one(f'SELECT full_name FROM "{table_name}" WHERE id = ?', ('test1',))
         self.assertEqual(row['full_name'], 'John')
 
+    @tag("postgres")
     async def test_rename_field_operation_postgres(self):
         """Test actual field rename operation on PostgreSQL"""
-        if not self.test_postgres:
-            self.skipTest("PostgreSQL not available for testing")
-        
         connection = await self._setup_database(use_postgres=True, model_suffix="Postgres")
         
         # Use the actual table name created by the provider
@@ -338,11 +326,9 @@ class TestMigrationsFieldRenames(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row['full_name'], 'John')
         self.assertEqual(row['bio'], 'A person')
 
+    @tag("postgres")
     async def test_multiple_field_renames_postgres(self):
         """Test multiple field renames in single migration on PostgreSQL"""
-        if not self.test_postgres:
-            self.skipTest("PostgreSQL not available for testing")
-        
         connection = await self._setup_database(use_postgres=True, model_suffix="MultiPostgres")
         
         # Use the actual table name created by the provider

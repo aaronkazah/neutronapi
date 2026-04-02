@@ -12,48 +12,6 @@ from neutronapi.db.connection import setup_databases, get_databases
 from neutronapi.db.migrations import CreateModel
 
 
-def _is_postgres_configured():
-    """Check if default database is configured for PostgreSQL and accessible."""
-    try:
-        from neutronapi.conf import settings
-        import asyncio
-        import asyncpg
-
-        db_config = settings.DATABASES.get('default', {})
-        if db_config.get('ENGINE', '').lower() != 'asyncpg':
-            return False
-
-        # Try to connect to verify PostgreSQL is actually available
-        async def check_connection():
-            try:
-                conn = await asyncpg.connect(
-                    host=db_config.get('HOST', 'localhost'),
-                    port=db_config.get('PORT', 5432),
-                    database='postgres',
-                    user=db_config.get('USER', 'postgres'),
-                    password=db_config.get('PASSWORD', 'postgres'),
-                )
-                await conn.close()
-                return True
-            except Exception:
-                return False
-
-        # Handle event loop issues properly
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If there's already a running loop, we can't use asyncio.run()
-                # This happens during test execution
-                return True  # Assume it's configured if we can't test
-            else:
-                return asyncio.run(check_connection())
-        except RuntimeError:
-            # No event loop, safe to create one
-            return asyncio.run(check_connection())
-    except Exception:
-        return False
-
-
 class JsonTestModel(Model):
     """Test model with JSON field for filtering tests."""
 
@@ -67,14 +25,7 @@ class TestJSONFiltering(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         """Set up test database and table."""
-        # Will be overridden by test runner to use SQLite or PostgreSQL
-        setup_databases({
-            'default': {
-                'ENGINE': 'aiosqlite',
-                'NAME': ':memory:',
-            }
-        })
-
+        self.db_manager = setup_databases()
         self.connection = await get_databases().get_connection('default')
 
         # Create table
@@ -102,6 +53,10 @@ class TestJSONFiltering(unittest.IsolatedAsyncioTestCase):
             data={'account': 'test_account', 'role': 'user', 'department': 'engineering', 'count': 4},
             count=4
         )
+
+    async def asyncTearDown(self):
+        await JsonTestModel.objects.all().delete()
+        await self.db_manager.close_all()
 
     async def test_json_key_filtering_exact(self):
         """Test filtering JSON field by key with exact value."""
@@ -221,19 +176,9 @@ class TestJSONFiltering(unittest.IsolatedAsyncioTestCase):
 
     async def test_json_key_exclude_exact(self):
         """Test excluding records by exact JSON key match."""
-        # First check what data we have
-        all_results = await JsonTestModel.objects.all()
-        print(f"All records: {[(r.name, r.data) for r in all_results]}")
-
-        # Test filter first (should work)
-        filter_results = await JsonTestModel.objects.filter(data__account='test_account')
-        print(f"Filter data__account='test_account': {[r.name for r in filter_results]}")
-
         # Exclude records with specific account
         results = await JsonTestModel.objects.exclude(data__account='test_account')
         results_list = list(results)
-        print(f"Exclude data__account='test_account': {[r.name for r in results_list]}")
-        print(f"Expected: user2, user3. Got: {len(results_list)} records")
 
         # Should exclude user1 and user4, leaving user2 and user3
         self.assertEqual(len(results_list), 2)
@@ -337,51 +282,6 @@ class TestJSONFiltering(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(key_list), 2)
         names = {r.name for r in key_list}
         self.assertEqual(names, {'user2', 'user3'})
-
-
-@unittest.skipUnless(_is_postgres_configured(), 'PostgreSQL not configured in settings.DATABASES')
-class TestJSONFilteringPostgreSQL(TestJSONFiltering):
-    """Test JSON filtering with PostgreSQL provider."""
-
-    async def asyncSetUp(self):
-        """Set up PostgreSQL test database."""
-        from neutronapi.tests.test_utils import get_postgres_test_config
-        setup_databases({
-            'default': get_postgres_test_config()
-        })
-
-        self.connection = await get_databases().get_connection('default')
-
-        # Create table
-        op = CreateModel('neutronapi.JsonTestModel', JsonTestModel._neutronapi_fields_)
-        await op.database_forwards('neutronapi', self.connection.provider, None, None, self.connection)
-
-        # Create test data with varied JSON structures
-        await JsonTestModel.objects.create(
-            name='user1',
-            data={'account': 'test_account', 'role': 'admin', 'active': True, 'count': 3},
-            count=1
-        )
-        await JsonTestModel.objects.create(
-            name='user2',
-            data={'account': 'other_account', 'role': 'user', 'active': False, 'count': 1},
-            count=2
-        )
-        await JsonTestModel.objects.create(
-            name='user3',
-            data={'role': 'guest', 'active': True, 'count': 2},  # No account key
-            count=3
-        )
-        await JsonTestModel.objects.create(
-            name='user4',
-            data={'account': 'test_account', 'role': 'user', 'department': 'engineering', 'count': 4},
-            count=4
-        )
-
-    async def asyncTearDown(self):
-        """Clean up PostgreSQL test database."""
-        await JsonTestModel.objects.all().delete()
-
 
 if __name__ == '__main__':
     unittest.main()

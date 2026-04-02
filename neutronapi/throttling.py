@@ -18,3 +18,7 @@ class BaseThrottle(abc.ABC):
     async def wait(self) -> Optional[int]:
         """Seconds the client should wait before retrying, or None."""
         return None
+
+    async def get_headers(self) -> dict[str, str]:
+        """Return quota headers for the current request."""
+        return {}

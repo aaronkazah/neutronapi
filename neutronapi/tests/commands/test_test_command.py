@@ -139,6 +139,53 @@ class TestSuiteFiltering(unittest.TestCase):
 
         self.assertEqual(filtered.countTestCases(), 1)
 
+    def test_filter_by_provider_uses_module_suffix(self):
+        """Provider filtering should keep provider-specific files out of the wrong run."""
+        class TestSQLite(unittest.TestCase):
+            def test_sqlite(self):
+                pass
+
+        class TestPostgres(unittest.TestCase):
+            def test_postgres(self):
+                pass
+
+        TestSQLite.__module__ = "fake.test_search_sqlite"
+        TestPostgres.__module__ = "fake.test_search_postgres"
+
+        loader = unittest.TestLoader()
+        suite = unittest.TestSuite()
+        suite.addTests(loader.loadTestsFromTestCase(TestSQLite))
+        suite.addTests(loader.loadTestsFromTestCase(TestPostgres))
+
+        sqlite_suite = self.cmd._filter_suite_by_provider(suite, "sqlite")
+        postgres_suite = self.cmd._filter_suite_by_provider(suite, "postgres")
+
+        self.assertEqual(sqlite_suite.countTestCases(), 1)
+        self.assertEqual(postgres_suite.countTestCases(), 1)
+
+    def test_filter_by_provider_uses_tags(self):
+        """Provider filtering should respect explicit sqlite/postgres tags in generic files."""
+        @tag("sqlite")
+        class TestSQLiteOnly(unittest.TestCase):
+            def test_sqlite_only(self):
+                pass
+
+        @tag("postgres")
+        class TestPostgresOnly(unittest.TestCase):
+            def test_postgres_only(self):
+                pass
+
+        loader = unittest.TestLoader()
+        suite = unittest.TestSuite()
+        suite.addTests(loader.loadTestsFromTestCase(TestSQLiteOnly))
+        suite.addTests(loader.loadTestsFromTestCase(TestPostgresOnly))
+
+        sqlite_suite = self.cmd._filter_suite_by_provider(suite, "sqlite")
+        postgres_suite = self.cmd._filter_suite_by_provider(suite, "postgres")
+
+        self.assertEqual(sqlite_suite.countTestCases(), 1)
+        self.assertEqual(postgres_suite.countTestCases(), 1)
+
     def test_reverse_suite(self):
         """Test suite reversal."""
         class TestOrder(unittest.TestCase):
@@ -182,6 +229,7 @@ class TestCommandHelp(unittest.TestCase):
             '--verbosity',
             '-q',
             '--quiet',
+            '--database',
         ]
 
         for opt in options:

@@ -6,47 +6,6 @@ from neutronapi.db.connection import setup_databases, get_databases
 from neutronapi.db.migrations import CreateModel
 
 
-def _is_postgres_configured():
-    """Check if default database is configured for PostgreSQL and accessible."""
-    try:
-        from neutronapi.conf import settings
-        import asyncio
-        import asyncpg
-        
-        db_config = settings.DATABASES.get('default', {})
-        if db_config.get('ENGINE', '').lower() != 'asyncpg':
-            return False
-            
-        # Try to connect to verify PostgreSQL is actually available
-        async def check_connection():
-            try:
-                conn = await asyncpg.connect(
-                    host=db_config.get('HOST', 'localhost'),
-                    port=db_config.get('PORT', 5432),
-                    database='postgres',
-                    user=db_config.get('USER', 'postgres'),
-                    password=db_config.get('PASSWORD', 'postgres'),
-                )
-                await conn.close()
-                return True
-            except:
-                return False
-        
-        try:
-            loop = asyncio.get_running_loop()
-            # We're in an async context, create a new event loop
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, check_connection())
-                return future.result()
-        except RuntimeError:
-            # No running loop, safe to use asyncio.run
-            return asyncio.run(check_connection())
-    except:
-        return False
-
-
-@unittest.skipUnless(_is_postgres_configured(), 'PostgreSQL not configured in settings.DATABASES')
 class TestMigrationsFTSPostgres(unittest.IsolatedAsyncioTestCase):
     class Post(Model):
         title = CharField()
@@ -79,4 +38,3 @@ class TestMigrationsFTSPostgres(unittest.IsolatedAsyncioTestCase):
             (schema, table),
         )
         self.assertIsNotNone(row)
-

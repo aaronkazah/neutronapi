@@ -73,9 +73,26 @@ class Throttled(APIException):
     """Request throttled exception."""
     status_code = 429
 
-    def __init__(self, message: str = "Request throttled", wait: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        message: Optional[str] = None,
+        wait: Optional[int] = None,
+        headers: Optional[dict[str, str]] = None,
+    ) -> None:
         self.wait = wait
-        super().__init__(message, type="throttled", status=429)
+        self.headers = headers or {}
+        if message is None:
+            if wait is None:
+                message = "Rate limit exceeded."
+            else:
+                message = f"Rate limit exceeded. Retry after {wait} seconds."
+        super().__init__(message, type="rate_limit_error", status=429)
+
+    def to_dict(self) -> Dict[str, Dict[str, str]]:
+        body = super().to_dict()
+        if self.wait is not None:
+            body["error"]["retry_after"] = self.wait
+        return body
 
 
 class AuthenticationFailed(APIException):

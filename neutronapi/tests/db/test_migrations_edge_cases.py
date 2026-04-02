@@ -21,6 +21,12 @@ from neutronapi.db.connection import setup_databases, get_databases
 from neutronapi.tests.db.test_utils import get_columns_dict, table_exists
 
 
+def _configured_database_engine() -> str:
+    from neutronapi.conf import settings
+
+    return settings.DATABASES.get('default', {}).get('ENGINE', '').lower()
+
+
 class TestMigrationErrorHandling(IsolatedAsyncioTestCase):
     """Test error handling and edge cases in migrations."""
 
@@ -30,11 +36,7 @@ class TestMigrationErrorHandling(IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         """Set up test database before each test."""
-        provider = os.environ.get('DATABASE_PROVIDER', '').lower()
-
-        if provider in ('asyncpg', 'postgres', 'postgresql'):
-            # Use the existing PostgreSQL test database setup
-            from neutronapi.conf import settings
+        if _configured_database_engine() == 'asyncpg':
             self.db_manager = setup_databases()
         else:
             # Use in-memory SQLite database for testing
@@ -47,11 +49,7 @@ class TestMigrationErrorHandling(IsolatedAsyncioTestCase):
             self.db_manager = setup_databases(db_config)
 
         self.connection = await self.db_manager.get_connection('default')
-
-        if hasattr(self.connection, 'provider'):
-            self.provider = self.connection.provider
-        else:
-            self.provider = self.connection
+        self.provider = self.connection.provider
             
     async def asyncTearDown(self):
         pass
@@ -177,11 +175,7 @@ class TestMigrationConstraints(IsolatedAsyncioTestCase):
         
     async def asyncSetUp(self):
         """Set up test database before each test."""
-        provider = os.environ.get('DATABASE_PROVIDER', '').lower()
-
-        if provider in ('asyncpg', 'postgres', 'postgresql'):
-            # Use the existing PostgreSQL test database setup
-            from neutronapi.conf import settings
+        if _configured_database_engine() == 'asyncpg':
             self.db_manager = setup_databases()
         else:
             # Use in-memory SQLite database for testing
@@ -194,11 +188,7 @@ class TestMigrationConstraints(IsolatedAsyncioTestCase):
             self.db_manager = setup_databases(db_config)
 
         self.connection = await self.db_manager.get_connection('default')
-
-        if hasattr(self.connection, 'provider'):
-            self.provider = self.connection.provider
-        else:
-            self.provider = self.connection
+        self.provider = self.connection.provider
             
     async def asyncTearDown(self):
         pass
@@ -462,11 +452,7 @@ class TestMigrationBackwardCompatibility(IsolatedAsyncioTestCase):
         
     async def asyncSetUp(self):
         """Set up test database before each test."""
-        provider = os.environ.get('DATABASE_PROVIDER', '').lower()
-
-        if provider in ('asyncpg', 'postgres', 'postgresql'):
-            # Use the existing PostgreSQL test database setup
-            from neutronapi.conf import settings
+        if _configured_database_engine() == 'asyncpg':
             self.db_manager = setup_databases()
         else:
             # Use in-memory SQLite database for testing
@@ -479,11 +465,7 @@ class TestMigrationBackwardCompatibility(IsolatedAsyncioTestCase):
             self.db_manager = setup_databases(db_config)
 
         self.connection = await self.db_manager.get_connection('default')
-
-        if hasattr(self.connection, 'provider'):
-            self.provider = self.connection.provider
-        else:
-            self.provider = self.connection
+        self.provider = self.connection.provider
             
     async def asyncTearDown(self):
         pass

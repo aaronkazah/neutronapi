@@ -8,11 +8,10 @@ import sys
 
 def main():
     os.environ.setdefault('NEUTRONAPI_SETTINGS_MODULE', 'apps.settings')
-    
+
     from neutronapi.cli import main as cli_main
-    cli_main()
+    raise SystemExit(cli_main())
 
 
 if __name__ == "__main__":
     main()
-

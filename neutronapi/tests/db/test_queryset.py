@@ -2,6 +2,7 @@ import unittest
 import os
 import tempfile
 from neutronapi.db import Model
+from neutronapi.commands.test import tag
 from neutronapi.db.fields import CharField, JSONField
 from neutronapi.db.connection import setup_databases
 from neutronapi.db.queryset import Q
@@ -19,16 +20,9 @@ class TestObject(Model):
     connections = JSONField(null=True, default=dict)
 
 
+@tag("sqlite")
 class TestQuerySetSQLite(unittest.IsolatedAsyncioTestCase):
-    def _should_skip_for_provider(self):
-        """Skip SQLite-specific tests when running with non-SQLite providers"""
-        provider = os.environ.get('DATABASE_PROVIDER', '').lower()
-        if provider in ('asyncpg', 'postgres', 'postgresql'):
-            self.skipTest('SQLite-specific test skipped when running with PostgreSQL provider')
-    
     async def asyncSetUp(self):
-        self._should_skip_for_provider()
-        
         # Create temporary SQLite database for testing
         self.temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
         self.temp_db.close()
@@ -109,6 +103,7 @@ class TestQuerySetSQLite(unittest.IsolatedAsyncioTestCase):
         self.assertIn(first_result.name, ['A', 'B'])
 
 
+@tag("sqlite")
 class TestQuerySetUsing(unittest.IsolatedAsyncioTestCase):
     """Test QuerySet.using() method for multi-database support."""
 

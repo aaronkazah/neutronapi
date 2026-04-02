@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 
+from neutronapi.commands.test import tag
 from neutronapi.db.models import Model
 from neutronapi.db.fields import CharField
 from neutronapi.db.connection import setup_databases
@@ -11,17 +12,9 @@ class AwaitUser(Model):
     name = CharField(null=False)
 
 
+@tag("sqlite")
 class TestQuerySetAwaitBehavior(unittest.IsolatedAsyncioTestCase):
-    def _should_skip_for_provider(self):
-        """Skip SQLite-specific tests when running with non-SQLite providers"""
-        import os
-        provider = os.environ.get('DATABASE_PROVIDER', '').lower()
-        if provider in ('asyncpg', 'postgres', 'postgresql'):
-            self.skipTest('SQLite-specific test skipped when running with PostgreSQL provider')
-    
     async def asyncSetUp(self):
-        self._should_skip_for_provider()
-        
         self.temp_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
         self.temp_db.close()
         db_config = {

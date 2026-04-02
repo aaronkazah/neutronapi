@@ -94,21 +94,22 @@ class Settings:
 
     def _use_default_test_settings(self):
         """Use default test settings for NeutronAPI core library testing."""
+        requested = os.getenv("NEUTRONAPI_TEST_DATABASE", "sqlite").lower().strip()
         engine = "aiosqlite"
         db_config = {
             "ENGINE": "aiosqlite",
             "NAME": ":memory:",
         }
 
-        if os.getenv("DATABASE_PROVIDER", "").lower() == "asyncpg":
+        if requested in {"postgres", "postgresql", "asyncpg"}:
             engine = "asyncpg"
             db_config = {
                 "ENGINE": "asyncpg",
-                "HOST": "127.0.0.1",
-                "PORT": 5432,
-                "NAME": "neutronapi_test",
-                "USER": "postgres",
-                "PASSWORD": "postgres",
+                "HOST": os.getenv("PGHOST", "127.0.0.1"),
+                "PORT": int(os.getenv("PGPORT", "5432")),
+                "NAME": os.getenv("PGDATABASE", "neutronapi_test"),
+                "USER": os.getenv("PGUSER", "postgres"),
+                "PASSWORD": os.getenv("PGPASSWORD", "postgres"),
             }
 
         self._settings = {

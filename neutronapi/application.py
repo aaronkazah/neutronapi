@@ -10,9 +10,11 @@ T = TypeVar('T')
 
 from neutronapi.base import API, Response
 from neutronapi.api import exceptions
+from neutronapi.event_bus import events
 from neutronapi.middleware.cors import CorsMiddleware
 from neutronapi.middleware.routing import RoutingMiddleware
 from neutronapi.middleware.allowed_hosts import AllowedHostsMiddleware
+from neutronapi.middleware.request_logging import RequestLoggingMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +139,7 @@ class Application:
         self._validate_unique_route_names()
 
         self.version = version
+        self.events = events
 
         # Initialize registry for universal dependency injection
         self.registry: Dict[str, Any] = {}
@@ -207,7 +210,8 @@ class Application:
             static_resolver=static_resolver,
         )
 
-        # Compose provided middlewares (instances only), else fallback to legacy allowed_hosts + CORS
+        # Compose provided middlewares (instances only), then wrap the whole HTTP stack with
+        # request logging so it sees handler responses and middleware rejections.
         if middlewares:
             composed = base_router
             # Middlewares are declared outermost-first; apply in reverse to wrap
@@ -216,11 +220,13 @@ class Application:
                 mw.app = composed
                 mw.registry = self.registry
                 composed = mw
-            self.app = composed
+            self.app = RequestLoggingMiddleware(composed)
         else:
             hosts_app = AllowedHostsMiddleware(base_router,
                                                allowed_hosts=allowed_hosts) if allowed_hosts else base_router
-            self.app = CorsMiddleware(hosts_app, allow_all_origins=cors_allow_all)
+            self.app = RequestLoggingMiddleware(
+                CorsMiddleware(hosts_app, allow_all_origins=cors_allow_all)
+            )
 
         # Expose lifecycle hooks on Application instance for compatibility
         # (handlers are already set on the app function above)
