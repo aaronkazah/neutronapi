@@ -5,6 +5,7 @@ import os
 import sys
 from typing import List
 
+from neutronapi.commands.base import BaseCommand
 from neutronapi.exceptions import CommandError
 
 
@@ -42,8 +43,9 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-class Command:
+class Command(BaseCommand):
     def __init__(self):
+        super().__init__()
         self.help = "Start the ASGI server with auto-reload and production options."
 
     async def handle(self, args: List[str]) -> None:
@@ -97,7 +99,7 @@ class Command:
                 "access_log": True,
                 "log_level": opts.log_level or "warning",
             }
-            print(f"Starting production server with {uvicorn_kwargs['workers']} workers...")
+            self.stdout(f"Starting production server with {uvicorn_kwargs['workers']} workers...")
         else:
             # Dev mode — hand off to watchdog unless --no-reload
             if not opts.no_reload and opts.reload is not False:
@@ -110,7 +112,7 @@ class Command:
                 "access_log": True,
                 "log_level": opts.log_level or "info",
             }
-            print("Starting development server without auto-reload...")
+            self.stdout("Starting development server without auto-reload...")
 
         # Apply explicit overrides
         if opts.workers is not None:
@@ -142,8 +144,8 @@ class Command:
                 raise CommandError(f"Could not load ASGI application from '{entry_point}': {e}")
 
         mode = "production" if opts.production else "development"
-        print(f"Starting {mode} server at http://{uvicorn_kwargs['host']}:{uvicorn_kwargs['port']}/")
-        print("Quit the server with CONTROL-C.")
+        self.stdout(f"Starting {mode} server at http://{uvicorn_kwargs['host']}:{uvicorn_kwargs['port']}/")
+        self.stdout("Quit the server with CONTROL-C.")
 
         try:
             from uvicorn import Config, Server
@@ -151,7 +153,7 @@ class Command:
             server = Server(config)
             await server.serve()
         except KeyboardInterrupt:
-            print("\nServer stopped.")
+            self.stdout("\nServer stopped.")
         except Exception as e:
             raise CommandError(f"Error starting server: {e}")
 
@@ -177,8 +179,8 @@ class Command:
                 connection = await get_databases().get_connection("default")
                 unapplied = await tracker.get_unapplied_migrations(connection)
                 if unapplied:
-                    print("\nWarning: You have unapplied migrations.")
-                    print("Run 'python manage.py migrate' to apply them.\n")
+                    self.stdout("\nWarning: You have unapplied migrations.")
+                    self.stdout("Run 'python manage.py migrate' to apply them.\n")
 
             await asyncio.wait_for(_check(), timeout=3.0)
         except Exception:
@@ -219,10 +221,12 @@ class Command:
         log_level = opts.log_level or "info"
         reload_dirs = opts.reload_dir or [".", "apps", "neutronapi"]
 
-        print("Starting development server with watchdog auto-reload...")
-        print(f"Watching directories: {', '.join(reload_dirs)}")
-        print(f"Starting server at http://{host}:{port}/")
-        print("Auto-reload enabled. Quit with CONTROL-C.")
+        self.stdout("Starting development server with watchdog auto-reload...")
+        self.stdout(f"Watching directories: {', '.join(reload_dirs)}")
+        self.stdout(f"Starting server at http://{host}:{port}/")
+        self.stdout("Auto-reload enabled. Quit with CONTROL-C.")
+
+        command = self
 
         class FileChangeHandler(FileSystemEventHandler):
             def __init__(self):
@@ -236,7 +240,7 @@ class Command:
                 if current_time - self.last_restart < self._restart_delay:
                     return
                 self.last_restart = current_time
-                print(f"\nDetected change in {event.src_path}")
+                command.stdout(f"\nDetected change in {event.src_path}")
                 request_restart()
 
         observer = Observer()
@@ -263,16 +267,16 @@ class Command:
             while True:
                 if needs_restart():
                     clear_restart()
-                    print("\nRestarting server...")
+                    self.stdout("\nRestarting server...")
                     restart_server()
                 if server_task.done():
                     break
                 await asyncio.sleep(1)
 
         except KeyboardInterrupt:
-            print("\nShutting down...")
+            self.stdout("\nShutting down...")
         except Exception as e:
-            print(f"Error: {e}")
+            self.stderr(f"Error: {e}")
         finally:
             observer.stop()
             observer.join()
@@ -297,6 +301,6 @@ class Command:
             server = Server(config)
             await server.serve()
         except KeyboardInterrupt:
-            print("\nServer stopped.")
+            self.stdout("\nServer stopped.")
         except Exception as e:
             raise CommandError(f"Error starting server: {e}")

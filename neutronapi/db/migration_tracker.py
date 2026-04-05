@@ -2,6 +2,7 @@
 File-based migration tracking system with hash validation.
 """
 import hashlib
+import logging
 import re
 import importlib.util
 import inspect
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import List, Dict, Optional, Set
 
 from neutronapi.db.connection import DatabaseType
+
+logger = logging.getLogger('neutronapi.migrations')
 
 
 class MigrationRecord:
@@ -260,8 +263,8 @@ class MigrationTracker:
                     connection, app_label, migration_file.migration_name
                 )
                 if record and record.file_hash != migration_file.file_hash:
-                    print(f"WARNING: Migration {app_label}.{migration_file.migration_name} "
-                          f"file content changed! Re-applying...")
+                    logger.warning("Migration %s.%s file content changed! Re-applying...",
+                                   app_label, migration_file.migration_name)
                     unapplied.append(migration_file)
         
         # Sort by app_label, then by migration number
@@ -270,7 +273,7 @@ class MigrationTracker:
     
     async def apply_migration(self, connection, migration_file: MigrationFile) -> None:
         """Apply a single migration file."""
-        print(f"Applying {migration_file.app_label}.{migration_file.migration_name}...")
+        logger.info("Applying %s.%s...", migration_file.app_label, migration_file.migration_name)
         
         try:
             # Load and execute the migration
@@ -282,12 +285,12 @@ class MigrationTracker:
                 
                 # Only mark as applied if migration succeeded without exception
                 await self.mark_migration_applied(connection, migration_file)
-                print(f"✓ Applied {migration_file.app_label}.{migration_file.migration_name}")
+                logger.info("Applied %s.%s", migration_file.app_label, migration_file.migration_name)
             else:
                 raise ValueError(f"No migration found in {migration_file.migration_name}")
             
         except Exception as e:
-            print(f"✗ Failed to apply {migration_file.app_label}.{migration_file.migration_name}: {e}")
+            logger.error("Failed to apply %s.%s: %s", migration_file.app_label, migration_file.migration_name, e)
             # Don't mark as applied if it failed
             raise
     
@@ -296,27 +299,27 @@ class MigrationTracker:
         unapplied = await self.get_unapplied_migrations(connection)
         
         if not unapplied:
-            print("No migrations to apply.")
+            logger.info("No migrations to apply.")
             return
         
-        print(f"Applying {len(unapplied)} migrations:")
+        logger.info("Applying %d migrations:", len(unapplied))
         for migration_file in unapplied:
             await self.apply_migration(connection, migration_file)
         
-        print("All migrations applied successfully!")
+        logger.info("All migrations applied successfully!")
     
     def show_migrations(self) -> None:
         """Show all discovered migration files."""
         all_migrations = self.discover_migration_files()
         
         if not all_migrations:
-            print("No migration files found.")
+            logger.info("No migration files found.")
             return
         
         for app_label, migrations in all_migrations.items():
-            print(f"\n{app_label}:")
+            logger.info("%s:", app_label)
             for migration_file in migrations:
-                print(f"  {migration_file.migration_name}")
+                logger.info("  %s", migration_file.migration_name)
 
     async def _build_state_from_database(self, connection) -> Dict:
         """Build state dictionary from current database schema."""

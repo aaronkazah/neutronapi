@@ -17,11 +17,14 @@ from copy import deepcopy
 from io import StringIO
 from typing import Iterable, List, Optional, Tuple
 
+from neutronapi.commands.base import BaseCommand
 
-class Command:
+
+class Command(BaseCommand):
     """Run tests with explicit provider selection and discovery filtering."""
 
     def __init__(self) -> None:
+        super().__init__()
         self._pg_container: Optional[str] = None
         self._pg_data_dir: Optional[str] = None
         self._keepdb = False
@@ -494,7 +497,7 @@ class Command:
 
         if not await self._has_existing_postgres_server(postgres_db):
             if verbosity > 0:
-                print("Bootstrapping PostgreSQL container...")
+                self.stdout("Bootstrapping PostgreSQL container...")
             success = await self._bootstrap_postgres()
             if not success:
                 success = await self._bootstrap_postgres_native()
@@ -750,7 +753,7 @@ class Command:
             return int(exc.code)
 
         if options.help_requested:
-            print(self.help)
+            self.stdout(self.help)
             return 0
 
         verbosity = 0 if options.quiet else options.verbosity
@@ -796,7 +799,7 @@ class Command:
                     cov.start()
                 except Exception as exc:
                     if verbosity > 0:
-                        print(f"Warning: coverage not started: {exc}")
+                        self.stdout(f"Warning: coverage not started: {exc}")
 
             if debug_sql:
                 logging.getLogger("neutronapi.db").setLevel(logging.DEBUG)
@@ -814,17 +817,17 @@ class Command:
 
             count = suite.countTestCases()
             if count == 0:
-                print("No tests found.")
+                self.stdout("No tests found.")
                 return 0
 
             if verbosity > 0:
-                print(f"Running {count} test(s) against {selected_database}...")
+                self.stdout(f"Running {count} test(s) against {selected_database}...")
                 if pattern:
-                    print(f"  Pattern: {pattern}")
+                    self.stdout(f"  Pattern: {pattern}")
                 if include_tags:
-                    print(f"  Tags: {', '.join(include_tags)}")
+                    self.stdout(f"  Tags: {', '.join(include_tags)}")
                 if exclude_tags:
-                    print(f"  Excluded tags: {', '.join(exclude_tags)}")
+                    self.stdout(f"  Excluded tags: {', '.join(exclude_tags)}")
 
             stream = sys.stderr if verbosity > 0 else StringIO()
             runner = unittest.TextTestRunner(
@@ -836,7 +839,7 @@ class Command:
 
             if parallel and parallel > 1:
                 if verbosity > 0:
-                    print(f"Running tests in parallel ({parallel} workers)...")
+                    self.stdout(f"Running tests in parallel ({parallel} workers)...")
 
                 import concurrent.futures
 
@@ -875,36 +878,36 @@ class Command:
                         if result["success"]:
                             passed += 1
                             if verbosity > 1:
-                                print(f"  PASS: {result['test']}")
+                                self.stdout(f"  PASS: {result['test']}")
                         else:
                             if result["errors"]:
                                 errors += result["errors"]
                                 if verbosity > 0:
-                                    print(f"  ERROR: {result['test']}")
+                                    self.stderr(f"  ERROR: {result['test']}")
                             else:
                                 failed += result["failures"]
                                 if verbosity > 0:
-                                    print(f"  FAIL: {result['test']}")
+                                    self.stderr(f"  FAIL: {result['test']}")
                             if verbosity > 1:
-                                print(result["output"])
+                                self.stderr(result["output"])
                             if failfast:
                                 executor.shutdown(wait=False)
                                 break
 
                 if verbosity > 0:
-                    print(f"\n{passed} passed, {failed} failed, {errors} errors")
+                    self.stdout(f"\n{passed} passed, {failed} failed, {errors} errors")
                 exit_code = 0 if failed == 0 and errors == 0 else 1
             else:
                 result = await asyncio.to_thread(runner.run, suite)
                 if not result.wasSuccessful():
                     exit_code = 1
                     if verbosity > 0:
-                        print(f"\n{len(result.failures)} failures, {len(result.errors)} errors")
+                        self.stderr(f"\n{len(result.failures)} failures, {len(result.errors)} errors")
                 elif verbosity > 0:
-                    print(f"\nAll {result.testsRun} tests passed!")
+                    self.stdout(f"\nAll {result.testsRun} tests passed!")
 
         except Exception as exc:
-            print(f"Error running tests: {exc}")
+            self.stderr(f"Error running tests: {exc}")
             import traceback
 
             traceback.print_exc()
@@ -915,7 +918,7 @@ class Command:
                     cov.stop()
                     cov.save()
                     if verbosity > 0:
-                        print("\nCoverage report:")
+                        self.stdout("\nCoverage report:")
                         cov.report()
                     if os.getenv("COV_HTML", "false").lower() == "true":
                         cov.html_report(directory="htmlcov")

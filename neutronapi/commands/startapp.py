@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from typing import List
 
+from neutronapi.commands.base import BaseCommand
 from neutronapi.exceptions import CommandError
 from neutronapi.scaffold import (
     ensure_app_destination,
@@ -13,14 +14,15 @@ from neutronapi.scaffold import (
 )
 
 
-class Command:
+class Command(BaseCommand):
     def __init__(self):
+        super().__init__()
         self.help = "Create or repair an app scaffold under ./apps."
 
     async def handle(self, args: List[str]) -> int:
         if not args or any(arg in {"--help", "-h", "help"} for arg in args):
-            print("Usage: python manage.py startapp <app_name> [apps/<app_dir>] [--force]")
-            print(self.help)
+            self.stdout("Usage: python manage.py startapp <app_name> [apps/<app_dir>] [--force]")
+            self.stdout(self.help)
             return 0
 
         force = False
@@ -43,9 +45,9 @@ class Command:
         )
 
         result = scaffold_app(app_name, str(destination), force=force)
-        print(format_scaffold_report(f"App '{app_name}'", result, force=force))
-        print("Next steps:")
-        print(f"  Wire apps.{app_name}.api into apps.entry")
-        print("  python manage.py check")
-        print("  python manage.py test")
+        self.stdout(format_scaffold_report(f"App '{app_name}'", result, force=force))
+        self.stdout("Next steps:")
+        self.stdout(f"  Wire apps.{app_name}.api into apps.entry")
+        self.stdout("  python manage.py check")
+        self.stdout("  python manage.py test")
         return 0

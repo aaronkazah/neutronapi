@@ -11,11 +11,13 @@ from __future__ import annotations
 import os
 from typing import List
 
+from neutronapi.commands.base import BaseCommand
 from neutronapi.exceptions import CommandError
 
 
-class Command:
+class Command(BaseCommand):
     def __init__(self):
+        super().__init__()
         self.help = "Detect model changes and write numbered migration files (0001_*.py, 0002_*.py, ...)"
 
     async def handle(self, args: List[str]) -> int:
@@ -27,8 +29,8 @@ class Command:
         """
         # Show help if requested
         if args and args[0] in {"--help", "-h", "help"}:
-            print(f"{self.help}\n")
-            print(self.handle.__doc__)
+            self.stdout(f"{self.help}\n")
+            self.stdout(self.handle.__doc__)
             return 0
 
         try:
@@ -59,7 +61,7 @@ class Command:
                     any_changes = True
 
             if not any_changes:
-                print("No changes detected")
+                self.stdout("No changes detected")
             return 0
 
         except ImportError as e:

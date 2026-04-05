@@ -6,21 +6,22 @@ Provides a consistent interface similar to Django's BaseCommand.
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import List, Optional, Any
 
 
 class BaseCommand:
     """
     Base class for all NeutronAPI commands.
-    
+
     Provides common functionality and a consistent interface for command execution.
     """
-    
+
     help = "A NeutronAPI command."
-    
+
     def __init__(self):
         """Initialize the command."""
-        pass
+        self.quiet = False
     
     def add_arguments(self, parser) -> None:
         """
@@ -63,23 +64,32 @@ class BaseCommand:
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, self.handle, *args, **options)
     
+    def stdout(self, message: str = "") -> None:
+        """Print a message to stdout, respecting the quiet flag."""
+        if not self.quiet:
+            print(message)
+
+    def stderr(self, message: str) -> None:
+        """Print a message to stderr (always printed, ignores quiet flag)."""
+        print(message, file=sys.stderr)
+
     def print_help(self) -> None:
         """Print help information for this command."""
-        print(f"{self.help}")
-        if hasattr(self, 'handle') and self.handle.__doc__:
-            print(f"\n{self.handle.__doc__}")
-    
+        self.stdout(f"{self.help}")
+        if self.handle.__doc__:
+            self.stdout(f"\n{self.handle.__doc__}")
+
     def success(self, message: str) -> None:
         """Print a success message."""
-        print(message)
-    
+        self.stdout(message)
+
     def warning(self, message: str) -> None:
         """Print a warning message."""
-        print(f"Warning: {message}")
-    
+        self.stdout(f"Warning: {message}")
+
     def error(self, message: str) -> None:
         """Print an error message."""
-        print(f"Error: {message}")
+        self.stderr(f"Error: {message}")
 
 
 class Command(BaseCommand):

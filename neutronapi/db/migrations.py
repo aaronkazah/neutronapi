@@ -1,6 +1,7 @@
 # core/db/migrations.py
 import importlib
 import inspect
+import logging
 import sys
 import textwrap
 import traceback
@@ -18,6 +19,8 @@ from neutronapi.db.fields import EnumField, BaseField
 from neutronapi.db.connection import get_databases, DatabaseType
 from neutronapi.db.models import Model  # Import Model
 from neutronapi.db.migration_tracker import MigrationTracker
+
+logger = logging.getLogger('neutronapi.migrations')
 
 
 class Migration:
@@ -72,8 +75,9 @@ class Operation(ABC):
             return full_table_name[len(prefix) :]
         else:
             # Log or raise error? This indicates a naming inconsistency.
-            print(
-                f"WARNING: Could not extract base table name from '{full_table_name}' using app label '{app_label}'. Returning full name."
+            logger.warning(
+                "Could not extract base table name from '%s' using app label '%s'. Returning full name.",
+                full_table_name, app_label
             )
             return full_table_name  # Fallback
 
@@ -138,7 +142,7 @@ class CreateModel(Operation):
                 await provider.setup_full_text(app_label, table_base_name, meta, self.fields)
         except Exception as e:
             # Non-fatal: log and continue migrations
-            print(f"Warning: FTS setup skipped for {app_label}.{table_base_name}: {e}")
+            logger.warning("FTS setup skipped for %s.%s: %s", app_label, table_base_name, e)
 
     async def database_backwards(
         self, app_label, provider, from_state, to_state, connection
@@ -179,8 +183,9 @@ class DeleteModel(Operation):
         self, app_label, provider, from_state, to_state, connection
     ):
         # Re-creating the model might be complex, often skipped in backwards
-        print(
-            f"  Skipping re-creation of model '{self.model_name}' in backwards migration."
+        logger.warning(
+            "Skipping re-creation of model '%s' in backwards migration.",
+            self.model_name
         )
 
     def describe(self):
@@ -216,8 +221,9 @@ class AddField(Operation):
                 app_label, table_base_name, self.field_name
             )
         else:
-            print(
-                f"  Column '{self.field_name}' not found in '{app_label}.{table_base_name}', skipping removal in backwards migration."
+            logger.warning(
+                "Column '%s' not found in '%s.%s', skipping removal in backwards migration.",
+                self.field_name, app_label, table_base_name
             )
 
     def describe(self):
@@ -240,8 +246,9 @@ class RemoveField(Operation):
         self, app_label, provider, from_state, to_state, connection
     ):
         # Re-adding requires knowing the field definition, often skipped
-        print(
-            f"  Skipping re-adding field '{self.field_name}' to model '{self.model_name}' in backwards migration (field details unknown)."
+        logger.warning(
+            "Skipping re-adding field '%s' to model '%s' in backwards migration (field details unknown).",
+            self.field_name, self.model_name
         )
 
     def describe(self):
@@ -267,8 +274,9 @@ class AlterField(Operation):
         self, app_label, provider, from_state, to_state, connection
     ):
         # Reverting alterations is complex, often skipped
-        print(
-            f"  Skipping reversion of field '{self.field_name}' on model '{self.model_name}' in backwards migration (old field details unknown)."
+        logger.warning(
+            "Skipping reversion of field '%s' on model '%s' in backwards migration (old field details unknown).",
+            self.field_name, self.model_name
         )
 
     def describe(self):
@@ -491,7 +499,7 @@ class MigrationManager:
                     models.append(obj)
 
         except Exception as e:
-            print(f"Warning: Could not load models from {models_file}: {e}")
+            logger.warning("Could not load models from %s: %s", models_file, e)
         finally:
             if self.base_dir in sys.path:
                 sys.path.remove(self.base_dir)
@@ -518,7 +526,7 @@ class MigrationManager:
                 )
                 processed_count += 1
             else:
-                print(f"No models found for app '{app_label}', skipping bootstrap.")
+                logger.debug("No models found for app '%s', skipping bootstrap.", app_label)
         return processed_count
 
     async def bootstrap(
@@ -538,7 +546,7 @@ class MigrationManager:
             models = self._discover_models(app_label)
 
         if not models:
-            print(f"No models found for app {app_label}, skipping bootstrap.")
+            logger.debug("No models found for app '%s', skipping bootstrap.", app_label)
             return None, None  # Return None if no models
 
         # Determine target DB alias if not provided
@@ -558,8 +566,9 @@ class MigrationManager:
                 await connection.execute(schema_query)
             except Exception as schema_err:
                 # This might fail if user lacks permissions, but table creation might still work if schema exists
-                print(
-                    f"Warning: Could not ensure schema '{app_label}' exists: {schema_err}"
+                logger.warning(
+                    "Could not ensure schema '%s' exists: %s",
+                    app_label, schema_err
                 )
 
         try:
@@ -898,7 +907,7 @@ class Migration{migration_id}(Migration):
                             self._apply_operation_to_state(state, op, app_label)
                             
             except Exception as e:
-                print(f"Warning: Could not load migration {migration_file}: {e}")
+                logger.warning("Could not load migration %s: %s", migration_file, e)
                 continue
                 
         return state
@@ -1046,8 +1055,9 @@ class Migration{migration_id}(Migration):
                     CreateModel(model_name=prefixed_name, fields=model_class._neutronapi_fields_, search_meta=search_meta)
                 )
             else:
-                print(
-                    f"Warning: Model '{model_name}' found in current state but not in provided models list."
+                logger.warning(
+                    "Model '%s' found in current state but not in provided models list.",
+                    model_name
                 )
 
         # --- Detect Deleted Models (excluding those identified as renames) ---
@@ -1059,13 +1069,15 @@ class Migration{migration_id}(Migration):
         # --- Detect Field Changes (for models present in both states or renamed) ---
         for model_name in current_models & previous_models:  # Intersection
             if model_name not in model_lookup:
-                print(
-                    f"Warning: Model '{model_name}' found in state comparison but not in provided models list."
+                logger.warning(
+                    "Model '%s' found in state comparison but not in provided models list.",
+                    model_name
                 )
                 continue
             if model_name not in previous_state:
-                print(
-                    f"Warning: Model '{model_name}' missing from previous state during field comparison."
+                logger.warning(
+                    "Model '%s' missing from previous state during field comparison.",
+                    model_name
                 )
                 continue
 
@@ -1078,8 +1090,9 @@ class Migration{migration_id}(Migration):
                 try:
                     previous_model_detail = json.loads(previous_model_detail)
                 except json.JSONDecodeError:
-                    print(
-                        f"Error: Invalid JSON in previous state for {model_name}. Cannot compare fields."
+                    logger.error(
+                        "Invalid JSON in previous state for %s. Cannot compare fields.",
+                        model_name
                     )
                     continue  # Skip field comparison for this model
 
@@ -1087,8 +1100,9 @@ class Migration{migration_id}(Migration):
                 not isinstance(previous_model_detail, dict)
                 or "fields" not in previous_model_detail
             ):
-                print(
-                    f"Warning: Previous state for '{model_name}' is not a valid dict with 'fields'. Skipping field comparison."
+                logger.warning(
+                    "Previous state for '%s' is not a valid dict with 'fields'. Skipping field comparison.",
+                    model_name
                 )
                 continue
 
@@ -1142,8 +1156,9 @@ class Migration{migration_id}(Migration):
                         )
                     )
                 else:
-                    print(
-                        f"Warning: Field '{field_name}' added to model '{model_name}' state, but not found in class definition."
+                    logger.warning(
+                        "Field '%s' added to model '%s' state, but not found in class definition.",
+                        field_name, model_name
                     )
 
             # --- Removed Fields ---
@@ -1172,8 +1187,9 @@ class Migration{migration_id}(Migration):
                             )
                         )
                     else:
-                        print(
-                            f"Warning: Field '{field_name}' altered in model '{model_name}' state, but not found in class definition."
+                        logger.warning(
+                            "Field '%s' altered in model '%s' state, but not found in class definition.",
+                            field_name, model_name
                         )
 
         return operations
@@ -1219,8 +1235,9 @@ class Migration{migration_id}(Migration):
         migrations_dir = self.get_migrations_dir(app_label)
 
         if not os.path.exists(migrations_dir):
-            print(
-                f"No migrations directory found for {app_label}. Starting with empty state."
+            logger.debug(
+                "No migrations directory found for %s. Starting with empty state.",
+                app_label
             )
             return state
 
@@ -1237,8 +1254,9 @@ class Migration{migration_id}(Migration):
         )
 
         if not migration_files:
-            print(
-                f"No numbered migration files found in {migrations_dir}. Starting with empty state."
+            logger.debug(
+                "No numbered migration files found in %s. Starting with empty state.",
+                migrations_dir
             )
             return state
 
@@ -1276,18 +1294,21 @@ class Migration{migration_id}(Migration):
                     # Check for HASH (backward compatibility with old migrations)
                     if hasattr(migration_module, "HASH") and isinstance(migration_module.HASH, dict):
                         # If latest migration has complete state, use it (gaps are ok)
-                        print(
-                            f"Missing migration files detected for {app_label}: "
-                            f"{[str(n).zfill(4) + '_*.py' for n in missing_numbers]}. "
-                            f"Using HASH state from latest migration {last_migration_file} (legacy format)."
+                        logger.warning(
+                            "Missing migration files detected for %s: %s. "
+                            "Using HASH state from latest migration %s (legacy format).",
+                            app_label,
+                            [str(n).zfill(4) + '_*.py' for n in missing_numbers],
+                            last_migration_file
                         )
                         return migration_module.HASH
                     elif hasattr(migration_module, 'operations'):
                         # Reconstruct state from all migration files in sequence
-                        print(
-                            f"Missing migration files detected for {app_label}: "
-                            f"{[str(n).zfill(4) + '_*.py' for n in missing_numbers]}. "
-                            f"Reconstructing state from all available migrations."
+                        logger.warning(
+                            "Missing migration files detected for %s: %s. "
+                            "Reconstructing state from all available migrations.",
+                            app_label,
+                            [str(n).zfill(4) + '_*.py' for n in missing_numbers]
                         )
                         return self._reconstruct_state_from_all_migrations(app_label, migration_files)
                         
@@ -1298,10 +1319,11 @@ class Migration{migration_id}(Migration):
                     sys.path.remove(self.base_dir)
                     
             # If we can't load latest migration state, return empty to regenerate
-            print(
-                f"Missing migration files detected for {app_label}: "
-                f"{[str(n).zfill(4) + '_*.py' for n in missing_numbers]}. "
-                f"Starting with empty state to regenerate missing migrations."
+            logger.warning(
+                "Missing migration files detected for %s: %s. "
+                "Starting with empty state to regenerate missing migrations.",
+                app_label,
+                [str(n).zfill(4) + '_*.py' for n in missing_numbers]
             )
             return {}
 
@@ -1339,18 +1361,19 @@ class Migration{migration_id}(Migration):
                     state = migration_module.HASH
                 else:
                     # No HASH found - try to reconstruct state from migration operations
-                    print(
-                        f"No HASH found in {module_name}. Reconstructing state from migration operations."
+                    logger.info(
+                        "No HASH found in %s. Reconstructing state from migration operations.",
+                        module_name
                     )
                     # Reconstruct state from all migrations in sequence
                     state = self._reconstruct_state_from_all_migrations(app_label, migration_files)
             else:
-                print(f"Error: Could not create module spec for {module_path}")
+                logger.error("Could not create module spec for %s", module_path)
 
         except Exception as e:
-            print(f"Error loading migration state from {module_name}: {str(e)}")
-            # Print the traceback for debugging
-            traceback.print_exc()
+            logger.error("Error loading migration state from %s: %s", module_name, e)
+            # Log the traceback for debugging
+            logger.error(traceback.format_exc())
             # Decide on behavior: return empty state or raise error?
             # Returning empty state might lead to incorrect migrations. Raising is safer.
             raise RuntimeError(
@@ -1426,10 +1449,11 @@ class Migration{migration_id}(Migration):
             return migration_instance
 
         except Exception as e:
-            print(
-                f"Error loading migration {module_name} from {migration_file}: {str(e)}"
+            logger.error(
+                "Error loading migration %s from %s: %s",
+                module_name, migration_file, e
             )
-            traceback.print_exc()
+            logger.error(traceback.format_exc())
             raise  # Re-raise to stop the migration process
 
         finally:
@@ -1536,8 +1560,8 @@ class Migration{migration_id}(Migration):
             
         except Exception as e:
             # Fallback to empty state if database tracking fails
-            print(f"Warning: Could not load state from database tracking: {e}")
-            print("Falling back to empty state for first migration generation")
+            logger.warning("Could not load state from database tracking: %s", e)
+            logger.warning("Falling back to empty state for first migration generation")
             return {}
 
     async def makemigrations(
@@ -1557,7 +1581,7 @@ class Migration{migration_id}(Migration):
 
         # If still no models, nothing to do
         if not models:
-            print(f"No models found for app '{app_label}'. No migrations needed.")
+            logger.debug("No models found for app '%s'. No migrations needed.", app_label)
             return [] if return_ops else None
 
         # 2. Build current state from the provided model classes
@@ -1576,8 +1600,9 @@ class Migration{migration_id}(Migration):
                     }
                 }
             else:
-                print(
-                    f"Warning: Item '{model_class}' in models list for '{app_label}' is not a valid Model subclass."
+                logger.warning(
+                    "Item '%s' in models list for '%s' is not a valid Model subclass.",
+                    model_class, app_label
                 )
 
         # 3. Build previous state from the last migration file (HASH for backward compatibility)
@@ -1622,7 +1647,7 @@ class Migration{migration_id}(Migration):
                 filepath = os.path.join(migrations_dir, migration_filename)
                 with open(filepath, "w") as f:
                     f.write(migration_content)
-                print(f"Migration file created: {filepath}")
+                logger.info("Migration file created: %s", filepath)
             # Return the operations so the command can detect that changes were made
             return operations
 
@@ -1659,13 +1684,13 @@ class Migration{migration_id}(Migration):
                 if hasattr(connection, 'commit'):
                     await connection.commit()
             except Exception as e:
-                print(f"ERROR applying direct operations for {app_label}: {e}")
+                logger.error("Error applying direct operations for %s: %s", app_label, e)
                 try:
                     if hasattr(connection, 'rollback'):
                         await connection.rollback()
                 except Exception as rb_err:
-                    print(f"Rollback failed: {rb_err}")
-                traceback.print_exc()
+                    logger.error("Rollback failed: %s", rb_err)
+                logger.error(traceback.format_exc())
                 raise
             return  # Finish after applying direct operations
 
@@ -1674,14 +1699,14 @@ class Migration{migration_id}(Migration):
             # Use MigrationTracker to apply all unapplied migrations
             await self.tracker.migrate(connection)
         except Exception as e:
-            print(f"ERROR during migration application: {e}")
+            logger.error("Error during migration application: %s", e)
             # Attempt to rollback
             try:
                 if hasattr(connection, 'rollback'):
                     await connection.rollback()
             except Exception as rb_err:
-                print(f"Rollback failed: {rb_err}")
-            traceback.print_exc()
+                logger.error("Rollback failed: %s", rb_err)
+            logger.error(traceback.format_exc())
             raise  # Re-raise the exception to indicate failure
 
     async def show_migrations(self, connection=None):
@@ -1692,19 +1717,19 @@ class Migration{migration_id}(Migration):
             applied_migrations = await self.tracker.get_applied_migrations(connection)
             all_migrations = self.tracker.discover_migration_files()
             
-            print("Migration Status:")
-            print("=" * 50)
-            
+            logger.info("Migration Status:")
+            logger.info("=" * 50)
+
             for app_label, migrations in all_migrations.items():
-                print(f"\n{app_label}:")
+                logger.info("\n%s:", app_label)
                 applied_for_app = applied_migrations.get(app_label, set())
-                
+
                 for migration_file in migrations:
-                    status = "✓ APPLIED" if migration_file.migration_name in applied_for_app else "✗ UNAPPLIED"
-                    print(f"  {migration_file.migration_name} ... {status}")
-                
+                    status = "APPLIED" if migration_file.migration_name in applied_for_app else "UNAPPLIED"
+                    logger.info("  %s ... %s", migration_file.migration_name, status)
+
                 if not migrations:
-                    print("  No migrations found")
+                    logger.info("  No migrations found")
         else:
             # Show discovered migration files only
             self.tracker.show_migrations()
@@ -1721,9 +1746,9 @@ class Migration{migration_id}(Migration):
         operations = self._detect_changes(previous_state, current_state, models, app_label)
         
         if not operations:
-            print(f"No changes detected for {app_label}")
+            logger.info("No changes detected for %s", app_label)
             return
         
         # Generate migration file
         await self._write_migration_file(app_label, operations)
-        print(f"Generated migration for {app_label} with {len(operations)} operations")
+        logger.info("Generated migration for %s with %d operations", app_label, len(operations))

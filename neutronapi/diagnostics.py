@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import logging
 import os
 import sys
 from dataclasses import dataclass, field
@@ -11,6 +12,8 @@ from typing import Iterable, List
 from neutronapi.command_discovery import discover_all_commands
 from neutronapi.conf import DEFAULT_SETTINGS_MODULE, is_neutronapi_development
 from neutronapi.scaffold import PROJECT_CANONICAL_FILES
+
+logger = logging.getLogger('neutronapi.diagnostics')
 
 
 @dataclass(frozen=True)
@@ -336,24 +339,27 @@ def collect_project_checks(project_root: str | None = None) -> CheckResult:
 
 def print_check_report(result: CheckResult, *, quiet: bool = False) -> None:
     for message in result.messages:
-        print(f"{message.level} {message.check_id}: {message.message}")
+        if message.level == "ERROR":
+            logger.warning(f"{message.level} {message.check_id}: {message.message}")
+        else:
+            logger.info(f"{message.level} {message.check_id}: {message.message}")
         if message.hint:
-            print(f"HINT: {message.hint}")
+            logger.info(f"HINT: {message.hint}")
 
     if quiet and not result.messages:
         return
 
     if result.has_errors:
-        print(
+        logger.info(
             f"System check identified {len(result.messages)} issue(s) "
             f"({len(result.errors)} errors, {len(result.warnings)} warnings)."
         )
     elif result.warnings:
-        print(
+        logger.info(
             f"System check identified {len(result.warnings)} warning(s) and no blocking errors."
         )
     else:
-        print("System check identified no issues.")
+        logger.info("System check identified no issues.")
 
 
 def run_project_checks(*, quiet: bool = False) -> int:

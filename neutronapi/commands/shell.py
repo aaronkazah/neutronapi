@@ -7,13 +7,15 @@ import sys
 import asyncio
 from typing import List
 
+from neutronapi.commands.base import BaseCommand
 from neutronapi.exceptions import CommandError
 
 
-class Command:
+class Command(BaseCommand):
     """Interactive shell command class."""
 
     def __init__(self):
+        super().__init__()
         self.help = "Launch an interactive Python shell with the project initialized"
 
     async def handle(self, args: List[str]) -> int:
@@ -37,14 +39,14 @@ class Command:
 
         # Show help if requested
         if args and args[0] in ["--help", "-h", "help"]:
-            print(f"{self.help}\n")
-            print(self.handle.__doc__)
+            self.stdout(f"{self.help}\n")
+            self.stdout(self.handle.__doc__)
             return 0
 
-        print("Starting interactive Python shell...")
-        print("Project modules are available for import.")
-        print("Use Ctrl+D or exit() to quit.")
-        print()
+        self.stdout("Starting interactive Python shell...")
+        self.stdout("Project modules are available for import.")
+        self.stdout("Use Ctrl+D or exit() to quit.")
+        self.stdout()
 
         # Set up environment
         os.environ.setdefault("PYTHONPATH", os.getcwd())
@@ -86,20 +88,20 @@ print()
         # Launch Python shell with asyncio support
         try:
             # Try IPython first (nicer interface)
-            print("Starting IPython shell...")
+            self.stdout("Starting IPython shell...")
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, "-m", "IPython", env=env
             )
             rc = await proc.wait()
             if rc != 0:
                 # Fallback to regular Python with asyncio
-                print("Starting Python shell with asyncio support...")
+                self.stdout("Starting Python shell with asyncio support...")
                 proc2 = await asyncio.create_subprocess_exec(
                     sys.executable, "-m", "asyncio", env=env
                 )
                 await proc2.wait()
         except KeyboardInterrupt:
-            print("\nShell interrupted by user")
+            self.stdout("\nShell interrupted by user")
         except Exception as e:
             raise CommandError(f"Error starting shell: {e}")
         finally:

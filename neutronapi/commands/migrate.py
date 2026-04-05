@@ -5,13 +5,15 @@ Apply database migrations from numbered files.
 import os
 from typing import List, Optional
 
+from neutronapi.commands.base import BaseCommand
 from neutronapi.exceptions import CommandError
 
 
-class Command:
+class Command(BaseCommand):
     """File-based migrate command class."""
 
     def __init__(self):
+        super().__init__()
         self.help = "Apply database migrations from numbered files (001_initial.py, 002_add_users.py, etc.)"
 
     def _parse_args(self, args: List[str]) -> tuple:
@@ -73,8 +75,8 @@ class Command:
 
         # Show help if requested
         if show_help:
-            print(f"{self.help}\n")
-            print(self.handle.__doc__)
+            self.stdout(f"{self.help}\n")
+            self.stdout(self.handle.__doc__)
             return 0
 
         try:
@@ -98,7 +100,7 @@ class Command:
 
             # Handle --show option
             if show_migrations:
-                print("Discovered migration files:")
+                self.stdout("Discovered migration files:")
                 tracker.show_migrations()
                 return
 
@@ -111,13 +113,13 @@ class Command:
                 # Migrate ALL databases in config
                 db_aliases = list(db_manager.config.keys())
 
-            print("Scanning for migration files...")
+            self.stdout("Scanning for migration files...")
 
             # Migrate each database
             for alias in db_aliases:
-                print(f"\n{'='*50}")
-                print(f"Migrating database: {alias}")
-                print(f"{'='*50}")
+                self.stdout(f"\n{'='*50}")
+                self.stdout(f"Migrating database: {alias}")
+                self.stdout(f"{'='*50}")
                 
                 connection = await db_manager.get_connection(alias)
                 try:
