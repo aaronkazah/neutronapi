@@ -3,6 +3,8 @@ name: Tests
 on:
   push:
     branches: [ main, develop ]
+    tags-ignore:
+      - '**'
   pull_request:
     branches: [ main, develop ]
   workflow_call:

@@ -165,7 +165,7 @@ class Command(BaseCommand):
         # Test invalid input
         with patch('builtins.print') as mock_print:
             result = count_command.handle('invalid')
-            mock_print.assert_called_with("Error: Please provide a valid number")
+            mock_print.assert_called_with("Error: Please provide a valid number", file=sys.stderr)
             self.assertEqual(result, 1)
 
     async def test_custom_command_error_handling(self):
