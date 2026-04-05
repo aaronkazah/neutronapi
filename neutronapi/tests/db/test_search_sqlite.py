@@ -76,7 +76,7 @@ class TestSearchSQLite(unittest.IsolatedAsyncioTestCase):
         await self._create_table()
 
         # Insert a base row that does NOT contain the term in base columns
-        await TestDoc.objects.create(id='d3', key='k3', name='Nope', body='', meta={})
+        await TestDoc.objects.create(id='d3', key='k3', name='Nope', body='no match here', meta={})
 
         # Create FTS table and populate with rowid-mapped content containing the term
         conn = await get_databases().get_connection('default')
