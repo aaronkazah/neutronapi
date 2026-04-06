@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import (
     Any,
+    AsyncIterator,
     List,
     Tuple,
     Callable,
@@ -185,6 +186,9 @@ class Endpoint:
     deprecated: bool = False
     # Documentation control
     include_in_docs: bool = True
+    request_body_mode: str = "buffered"
+    max_request_body_bytes: Optional[int] = None
+    response_body_mode: str = "buffered"
 
 
 class API:
@@ -222,6 +226,8 @@ class API:
     model: Optional[Type[Model]] = None
     resource: str = ""
     authentication_class: Optional[Any] = None
+    hosts: Optional[List[str]] = None
+    excluded_path_prefixes: Optional[List[str]] = None
     name: Optional[str] = None
     page_size: int = 10
     MAX_PAGE_SIZE: int = 100
@@ -253,6 +259,8 @@ class API:
         permission_classes: Optional[List[Any]] = None,
         throttle_classes: Optional[List[Any]] = None,
         authentication_class: Optional[Any] = None,
+        hosts: Optional[List[str]] = None,
+        excluded_path_prefixes: Optional[List[str]] = None,
         name: Optional[str] = None,
         page_size: Optional[int] = None,
         lookup_field: Optional[str] = None,
@@ -266,6 +274,14 @@ class API:
         self.permission_classes = permission_classes or []
         self.throttle_classes = throttle_classes or []
         self.authentication_class = authentication_class or self.authentication_class
+        class_hosts = list(self.hosts) if self.hosts else None
+        self.hosts = list(hosts) if hosts is not None else class_hosts
+        class_excluded_prefixes = list(self.excluded_path_prefixes or [])
+        self.excluded_path_prefixes = (
+            list(excluded_path_prefixes)
+            if excluded_path_prefixes is not None
+            else class_excluded_prefixes
+        )
 
         # Allow overriding configuration via init
         if self.page_size is None:
@@ -306,7 +322,7 @@ class API:
         params: Dict[str, Union[str, List[str]]] = {}
 
         if query_string:
-            parsed = parse_qs(query_string)
+            parsed = parse_qs(query_string, keep_blank_values=True)
             # Convert all single-item lists to single values
             params = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
         return params
@@ -382,8 +398,9 @@ class API:
         deprecated: bool = False,
         # Documentation control
         include_in_docs: bool = True,
-        # Body size limit override (bytes); None uses API-level MAX_BODY_SIZE
-        max_body_size: Optional[int] = None,
+        request_body_mode: str = "buffered",
+        max_request_body_bytes: Optional[int] = None,
+        response_body_mode: str = "buffered",
     ) -> Callable:
         """Decorator for defining API endpoints.
 
@@ -409,6 +426,9 @@ class API:
             parameters: List of parameter definitions for query/path params
             deprecated: Whether this endpoint is deprecated
             include_in_docs: Whether to include this endpoint in generated documentation (default: True)
+            request_body_mode: "buffered" (default) or "streamed"
+            max_request_body_bytes: Per-endpoint request size limit in bytes
+            response_body_mode: "buffered" (default) or "streamed"
 
         Examples:
             @API.endpoint(
@@ -514,13 +534,16 @@ class API:
                 parameters=parameters,
                 deprecated=deprecated,
                 include_in_docs=include_in_docs,
+                request_body_mode=request_body_mode,
+                max_request_body_bytes=max_request_body_bytes,
+                response_body_mode=response_body_mode,
             )
             # Attach extra endpoint metadata for middlewares/parsers
             wrapper._endpoint_middlewares = middlewares or []
             wrapper._endpoint_parsers = parsers or []
-            # Per-endpoint body size limit override
-            if max_body_size is not None:
-                wrapper._max_body_size = max_body_size
+            wrapper._request_body_mode = request_body_mode
+            wrapper._max_request_body_bytes = max_request_body_bytes
+            wrapper._response_body_mode = response_body_mode
             return wrapper
 
         return decorator
@@ -847,14 +870,39 @@ class API:
                 }
             )
 
-            # Resolve body size limit: per-endpoint override or API-level default
-            max_body = getattr(handler, "_max_body_size", None) or self.MAX_BODY_SIZE
+            request_body_mode = getattr(handler, "_request_body_mode", "buffered")
+            max_request_body_bytes = getattr(
+                handler,
+                "_max_request_body_bytes",
+                None,
+            )
+            max_body = (
+                self.MAX_BODY_SIZE
+                if request_body_mode == "buffered"
+                and max_request_body_bytes is None
+                else max_request_body_bytes
+            )
 
             # Parse request body using parser instances
             from neutronapi.parsers import JSONParser, BaseParser
+            from neutronapi.streams import AsyncByteStream
+            from neutronapi.responses import StreamingResponse
             headers_dict = dict(scope.get("headers", []))
             raw_body = b""
-            if method in ["POST", "PUT", "PATCH"]:
+            if request_body_mode == "streamed":
+                content_length = None
+                raw_content_length = headers_dict.get(b"content-length")
+                if raw_content_length:
+                    try:
+                        content_length = int(raw_content_length.decode("utf-8"))
+                    except (TypeError, ValueError):
+                        raise exceptions.ValidationError("Invalid Content-Length header")
+                kwargs["stream"] = AsyncByteStream(
+                    receive,
+                    content_length=content_length,
+                    max_bytes=max_body,
+                )
+            elif method in ["POST", "PUT", "PATCH"]:
                 # Read complete body once, enforcing size limit
                 msg = await receive()
                 if msg.get("type") == "http.request":
@@ -881,7 +929,7 @@ class API:
             endpoint_parsers = list(getattr(handler, "_endpoint_parsers", []) or [])
 
             parsed_kwargs = {}
-            if method in ["POST", "PUT", "PATCH"]:
+            if request_body_mode == "buffered" and method in ["POST", "PUT", "PATCH"]:
                 # Select parser: first matching endpoint parser; else default JSONParser()
                 parser = None
                 for p in endpoint_parsers:
@@ -900,7 +948,7 @@ class API:
                 response = await handler(scope2, receive2, send2, **kwargs)
                 if response is None:
                     return
-                elif isinstance(response, Response):
+                elif isinstance(response, (Response, StreamingResponse)):
                     return await response(scope2, receive2, send2)
                 else:
                     raise ValueError(f"Invalid response type: {type(response)}")
@@ -917,17 +965,7 @@ class API:
             await app_to_call(scope, receive, send_with_headers)
 
         except exceptions.APIException as e:
-            # Unified API error shape
-            error_headers: List[Tuple[bytes, bytes]] = []
-            if isinstance(e, exceptions.Throttled):
-                if e.wait is not None:
-                    error_headers.append((b"retry-after", str(e.wait).encode("utf-8")))
-                error_headers.extend(_header_tuples_from_mapping(e.headers))
-            response = Response(
-                body=e.to_dict(),
-                status_code=getattr(e, "status_code", 500),
-                headers=error_headers,
-            )
+            response = await self.render_api_exception(scope, e)
             return await response(scope, receive, _wrap_send_with_scope_headers(scope, send))
 
     async def handle_websocket(
@@ -1037,6 +1075,22 @@ class API:
             body=data, status_code=status, headers=headers, media_type=media_type
         )
         return resp
+
+    async def render_api_exception(
+        self,
+        scope: Scope,
+        error: exceptions.APIException,
+    ) -> Response:
+        error_headers: List[Tuple[bytes, bytes]] = []
+        if isinstance(error, exceptions.Throttled):
+            if error.wait is not None:
+                error_headers.append((b"retry-after", str(error.wait).encode("utf-8")))
+            error_headers.extend(_header_tuples_from_mapping(error.headers))
+        return Response(
+            body=error.to_dict(),
+            status_code=getattr(error, "status_code", 500),
+            headers=error_headers,
+        )
 
     @staticmethod
     async def data(receive: Callable) -> Dict:

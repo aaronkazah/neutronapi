@@ -2,11 +2,12 @@
 
 from importlib import import_module
 
-__version__ = "0.5.13"
+__version__ = "0.6.0"
 
 _EXPORTS = {
     "API": ("neutronapi.base", "API"),
     "Response": ("neutronapi.base", "Response"),
+    "StreamingResponse": ("neutronapi.responses", "StreamingResponse"),
     "Endpoint": ("neutronapi.base", "Endpoint"),
     "Application": ("neutronapi.application", "Application"),
     "Background": ("neutronapi.background", "Background"),

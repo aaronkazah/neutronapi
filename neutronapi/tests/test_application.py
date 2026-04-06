@@ -14,6 +14,35 @@ class PingAPI(API):
         return await self.response({"ok": True, "path": scope.get("path")})
 
 
+class DefaultRootAPI(API):
+    name = "default_root"
+    resource = ""
+
+    @API.endpoint("/ping", methods=["GET"], name="ping")
+    async def ping(self, scope, receive, send, **kwargs):
+        return await self.response({"api": "default"})
+
+
+class StorageRootAPI(API):
+    name = "storage_root"
+    resource = ""
+    hosts = ["storage.example.com"]
+    excluded_path_prefixes = ["/v1/"]
+
+    @API.endpoint("/ping", methods=["GET"], name="ping")
+    async def ping(self, scope, receive, send, **kwargs):
+        return await self.response({"api": "storage"})
+
+
+class ControlPlaneAPI(API):
+    name = "control_plane"
+    resource = "/v1/storage"
+
+    @API.endpoint("/backends", methods=["GET"], name="backends")
+    async def list_backends(self, scope, receive, send, **kwargs):
+        return await self.response({"api": "control"})
+
+
 async def call_asgi(app, scope, body: bytes = b""):
     messages = []
 
@@ -94,6 +123,56 @@ class TestAPIAndApplication(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIn("Ambiguous CORS configuration", str(ctx.exception))
+
+    async def test_host_scoped_root_api_wins_on_matching_host(self):
+        app = Application(
+            apis=[DefaultRootAPI(), StorageRootAPI(), ControlPlaneAPI()],
+        )
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/ping",
+            "headers": [(b"host", b"storage.example.com")],
+        }
+
+        messages = await call_asgi(app, scope)
+
+        self.assertEqual(messages[0]["status"], 200)
+        self.assertIn(b'"api": "storage"', messages[1]["body"])
+
+    async def test_host_scoped_root_api_is_ignored_on_other_hosts(self):
+        app = Application(
+            apis=[DefaultRootAPI(), StorageRootAPI(), ControlPlaneAPI()],
+        )
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/ping",
+            "headers": [(b"host", b"api.example.com")],
+        }
+
+        messages = await call_asgi(app, scope)
+
+        self.assertEqual(messages[0]["status"], 200)
+        self.assertIn(b'"api": "default"', messages[1]["body"])
+
+    async def test_host_scoped_root_api_does_not_expose_control_plane_paths(self):
+        app = Application(
+            apis=[StorageRootAPI(), ControlPlaneAPI()],
+        )
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/v1/storage/backends",
+            "headers": [(b"host", b"storage.example.com")],
+        }
+
+        messages = await call_asgi(app, scope)
+
+        self.assertEqual(messages[0]["status"], 404)
 
 class MockUtil:
     def __init__(self, util_id):

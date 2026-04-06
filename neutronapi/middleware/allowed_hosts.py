@@ -8,6 +8,34 @@ from neutronapi.conf import settings
 logger = logging.getLogger(__name__)
 
 
+def is_host_allowed(host: str, allowed_hosts: List[str]) -> bool:
+    """Check if a host is in the allowed hosts list."""
+    if "*" in allowed_hosts:
+        return True
+
+    host_without_port = host.split(":")[0]
+
+    if host in allowed_hosts or host_without_port in allowed_hosts:
+        return True
+
+    for allowed_host in allowed_hosts:
+        if allowed_host.startswith("."):
+            if host.endswith(allowed_host) or host_without_port.endswith(
+                allowed_host
+            ):
+                return True
+        elif allowed_host.startswith("*."):
+            domain = allowed_host[2:]
+            if host.endswith("." + domain) or host_without_port.endswith(
+                "." + domain
+            ):
+                return True
+            if host == domain or host_without_port == domain:
+                return True
+
+    return False
+
+
 class AllowedHostsMiddleware:
     """ALLOWED_HOSTS validation middleware."""
 
@@ -63,30 +91,7 @@ class AllowedHostsMiddleware:
 
     def is_host_allowed(self, host: str, allowed_hosts: List[str]) -> bool:
         """Check if a host is in the allowed hosts list."""
-        if "*" in allowed_hosts:
-            return True
-
-        host_without_port = host.split(":")[0]
-
-        if host in allowed_hosts or host_without_port in allowed_hosts:
-            return True
-
-        for allowed_host in allowed_hosts:
-            if allowed_host.startswith("."):
-                if host.endswith(allowed_host) or host_without_port.endswith(
-                    allowed_host
-                ):
-                    return True
-            elif allowed_host.startswith("*."):
-                domain = allowed_host[2:]
-                if host.endswith("." + domain) or host_without_port.endswith(
-                    "." + domain
-                ):
-                    return True
-                if host == domain or host_without_port == domain:
-                    return True
-
-        return False
+        return is_host_allowed(host, allowed_hosts)
 
     async def send_error_response(self, send: Callable, status_code: int, message: str):
         """Send an error response."""

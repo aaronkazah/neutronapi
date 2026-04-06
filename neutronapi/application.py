@@ -13,7 +13,7 @@ from neutronapi.api import exceptions
 from neutronapi.event_bus import events
 from neutronapi.middleware.cors import CorsMiddleware
 from neutronapi.middleware.routing import RoutingMiddleware
-from neutronapi.middleware.allowed_hosts import AllowedHostsMiddleware
+from neutronapi.middleware.allowed_hosts import AllowedHostsMiddleware, is_host_allowed
 from neutronapi.middleware.request_logging import RequestLoggingMiddleware
 
 logger = logging.getLogger(__name__)
@@ -109,10 +109,10 @@ class Application:
             >>> logger = self.registry.get('utils:logger')
             >>> email = self.registry.get('services:email')
         """
-        # Convert provided APIs into two mappings: name-based and resource-based
+        # Convert provided APIs into name-based lookups and an ordered routing list
         from neutronapi.base import API
         self.apis: Dict[str, 'API'] = {}  # name -> api (for reverse lookups)
-        self._resource_apis: Dict[str, 'API'] = {}  # resource -> api (for routing)
+        self._routing_apis: List['API'] = []  # APIs in registration order (for routing)
         
         if apis:
             if isinstance(apis, dict):
@@ -122,7 +122,7 @@ class Application:
                     if resource is None:
                         raise ValueError(f"API {api.__class__.__name__} must define a non-null 'resource'")
                     self.apis[name] = api
-                    self._resource_apis[resource] = api
+                    self._routing_apis.append(api)
             else:
                 # For list[API], use the API name as the key for reverse lookups
                 for api in apis:
@@ -135,7 +135,7 @@ class Application:
                         raise ValueError(f"API {api.__class__.__name__} must have a 'name' attribute for reverse lookups")
                     
                     self.apis[api.name] = api
-                    self._resource_apis[resource] = api
+                    self._routing_apis.append(api)
         
         # Validate no duplicate route names across all APIs
         self._validate_unique_route_names()
@@ -158,22 +158,42 @@ class Application:
         for api in self.apis.values():
             setattr(api, 'registry', self.registry)
 
+        def select_api(path: str, host: str) -> Optional["API"]:
+            host_surface_apis = [
+                api
+                for api in self._routing_apis
+                if api.hosts and host and is_host_allowed(host, api.hosts)
+            ]
+            base_candidates = (
+                host_surface_apis
+                if host_surface_apis
+                else [api for api in self._routing_apis if not api.hosts]
+            )
+            candidate_apis = [
+                api
+                for api in base_candidates
+                if not self._is_path_excluded(api, path)
+            ]
+
+            for api in candidate_apis:
+                if self._path_equals_resource(path, api.resource):
+                    return api
+
+            for api in candidate_apis:
+                if self._path_matches_resource(path, api.resource):
+                    return api
+
+            return None
+
         # Simple handler that routes to APIs
         async def app(scope, receive, send):
             if scope["type"] == "http":
                 path = scope.get("path", "/")
-
-                # Check if path matches any API exactly
-                if path in self._resource_apis:
-                    api = self._resource_apis[path]
+                host = self._extract_host(scope)
+                api = select_api(path, host)
+                if api is not None:
                     await api.handle(scope, receive, send)
                     return
-
-                # Check if path starts with any API prefix
-                for api_path, api in self._resource_apis.items():
-                    if path.startswith(api_path):
-                        await api.handle(scope, receive, send)
-                        return
 
                 # Default 404 for unmatched paths - return consistent JSON error
                 err = exceptions.NotFound().to_dict()
@@ -182,20 +202,13 @@ class Application:
 
             elif scope["type"] == "websocket":
                 path = scope.get("path", "/")
+                host = self._extract_host(scope)
                 logger.debug("Routing websocket for path=%s", path)
-
-                # Check if path matches any API exactly
-                if path in self._resource_apis:
-                    api = self._resource_apis[path]
+                api = select_api(path, host)
+                if api is not None:
+                    logger.debug("Matched websocket API=%s", api.name)
                     await api.handle(scope, receive, send)
                     return
-
-                # Check if path starts with any API prefix
-                for api_path, api in self._resource_apis.items():
-                    if path.startswith(api_path):
-                        logger.debug("Matched websocket API prefix=%s", api_path)
-                        await api.handle(scope, receive, send)
-                        return
 
                 # No matching API for websocket - close connection
                 logger.debug("No websocket API match for path=%s", path)
@@ -261,6 +274,46 @@ class Application:
 
             app.on_startup.append(_start_background)
             app.on_shutdown.append(_stop_background)
+
+    @staticmethod
+    def _extract_host(scope: Dict[str, Any]) -> str:
+        headers = dict(scope.get("headers", []))
+        return headers.get(b"host", b"").decode("utf-8", "ignore")
+
+    @staticmethod
+    def _path_matches_prefix(path: str, prefix: str) -> bool:
+        if not prefix:
+            return False
+
+        if prefix == "/":
+            return path.startswith("/")
+
+        if prefix.endswith("/"):
+            return path.startswith(prefix)
+
+        normalized = prefix.rstrip("/")
+        return path == normalized or path.startswith(f"{normalized}/")
+
+    @classmethod
+    def _is_path_excluded(cls, api: "API", path: str) -> bool:
+        return any(
+            cls._path_matches_prefix(path, prefix)
+            for prefix in (api.excluded_path_prefixes or [])
+        )
+
+    @staticmethod
+    def _path_equals_resource(path: str, resource: str) -> bool:
+        normalized = (resource or "").rstrip("/")
+        if not normalized:
+            return path in ("", "/")
+        return path == normalized
+
+    @staticmethod
+    def _path_matches_resource(path: str, resource: str) -> bool:
+        normalized = (resource or "").rstrip("/")
+        if not normalized:
+            return True
+        return path == normalized or path.startswith(f"{normalized}/")
 
     def _validate_registry_key(self, key: str) -> None:
         """Validate registry key follows namespace:name format.
