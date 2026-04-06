@@ -28,6 +28,7 @@ dependencies = [
   "uvloop>=0.17.0",
   "aiosqlite>=0.19.0",
   "orjson>=3.10.0",
+  "maxminddb>=2.8.0",
   "python-multipart>=0.0.9",
   "PyJWT>=2.8.0",
   "watchdog>=3.0.0",

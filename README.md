@@ -275,6 +275,26 @@ Replay responses include:
 - `Idempotency-Key`
 - `Idempotent-Replayed: true`
 
+## Geo Middleware
+
+```python
+from neutronapi.application import Application
+from neutronapi.middleware import CloudflareGeoMiddleware, MaxMindGeoMiddleware
+
+
+app = Application(
+    apis=[PostAPI()],
+    middlewares=[
+        MaxMindGeoMiddleware(),
+        CloudflareGeoMiddleware(),
+    ],
+)
+```
+
+Middleware order is the fallback chain. The first middleware that sets `scope["_neutronapi_geo"]` wins, so custom geo middleware can run ahead of the built-ins.
+
+`MaxMindGeoMiddleware` uses `GEOIP_DATABASE_PATH` from `apps/settings.py` and enriches the scope with `country_code`, `region`, `city`, `latitude`, and `longitude`. `CloudflareGeoMiddleware` is a lightweight fallback that only fills `country_code` from `cf-ipcountry`.
+
 ## Background Tasks
 
 ```python
