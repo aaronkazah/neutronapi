@@ -251,8 +251,16 @@ class OpenAPIGenerator:
             if effective_auth:
                 self._add_security_scheme(effective_auth)
 
-            # Skip websocket routes for now
             if methods == ["WEBSOCKET"]:
+                openapi_path = self._convert_path_to_openapi(original_path)
+                if not self._should_include_websocket_endpoint(handler, openapi_path):
+                    continue
+                self._process_websocket_route(
+                    api,
+                    original_path,
+                    handler,
+                    route_authentication_class,
+                )
                 continue
 
             # Check if endpoint should be included in docs  
@@ -280,6 +288,18 @@ class OpenAPIGenerator:
         if endpoint_metadata and not endpoint_metadata.include_in_docs and not self.include_all:
             return False
 
+        return self._is_path_included(path)
+
+    def _should_include_websocket_endpoint(self, handler: callable, path: str) -> bool:
+        """Check if a websocket endpoint should be included in documentation."""
+        websocket_metadata = getattr(handler, "_websocket_metadata", None) or {}
+        if not websocket_metadata.get("include_in_docs", True) and not self.include_all:
+            return False
+
+        return self._is_path_included(path)
+
+    def _is_path_included(self, path: str) -> bool:
+        """Check whether a path is globally included in documentation."""
         # Check configured exclusion patterns first
         for pattern in self.exclude_patterns:
             if fnmatch.fnmatch(path, pattern):
@@ -305,6 +325,54 @@ class OpenAPIGenerator:
                     return False
 
         return True
+
+    def _process_websocket_route(
+        self,
+        api: API,
+        path: str,
+        handler: callable,
+        route_authentication_class: Any = None,
+    ) -> None:
+        """Process a websocket route and merge it into the OpenAPI path item."""
+        websocket_metadata = getattr(handler, "_websocket_metadata", None) or {}
+        openapi_path = self._convert_path_to_openapi(path)
+
+        if openapi_path not in self.spec["paths"]:
+            self.spec["paths"][openapi_path] = {}
+
+        tags = websocket_metadata.get("tags") or api.tags or ([api.name.title()] if api.name else None)
+        if tags:
+            for tag in tags:
+                if tag not in [t["name"] for t in self.spec["tags"]]:
+                    self.spec["tags"].append(
+                        {"name": tag, "description": f"Operations for {tag}"}
+                    )
+
+        effective_auth = (
+            route_authentication_class
+            if route_authentication_class is not None
+            else api.authentication_class
+        )
+        operation = {
+            "operationId": self._generate_operation_id(api, handler, "WEBSOCKET", None),
+            "summary": websocket_metadata.get("summary")
+            or self._generate_summary(handler, "WEBSOCKET", None),
+            "description": websocket_metadata.get("description")
+            or self._generate_description(handler, api),
+            "tags": tags or [],
+            "parameters": list(websocket_metadata.get("parameters") or []),
+        }
+        if websocket_metadata.get("messages") is not None:
+            operation["messages"] = websocket_metadata["messages"]
+        if (
+            api.authentication_class
+            or route_authentication_class is not None
+        ):
+            operation["security"] = self._generate_security_requirements(
+                effective_auth
+            )
+
+        self.spec["paths"][openapi_path]["x-layerbrain-websocket"] = operation
 
     async def _process_route(
         self,

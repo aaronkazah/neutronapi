@@ -554,6 +554,12 @@ class API:
         authentication_class: Optional[Any] = None,
         permission_classes: Optional[List[Any]] = None,
         throttle_classes: Optional[List[Any]] = None,
+        summary: Optional[str] = None,
+        description: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        parameters: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[Dict[str, Any]] = None,
+        include_in_docs: bool = True,
     ) -> Callable:
         """Decorator for defining WebSocket endpoints.
 
@@ -562,6 +568,12 @@ class API:
             authentication_class: Override auth for this endpoint (None = use API-level)
             permission_classes: Override permissions for this endpoint
             throttle_classes: Override throttles for this endpoint
+            summary: Brief summary for generated docs
+            description: Detailed description for generated docs
+            tags: List of tags for grouping operations
+            parameters: List of query/path/header parameter definitions
+            messages: Arbitrary websocket message contract details for docs
+            include_in_docs: Whether to include this websocket endpoint in generated docs
         """
 
         def decorator(func: Callable):
@@ -575,6 +587,12 @@ class API:
                 "authentication_class": authentication_class,
                 "permission_classes": permission_classes,
                 "throttle_classes": throttle_classes,
+                "summary": summary,
+                "description": description or func.__doc__,
+                "tags": tags,
+                "parameters": parameters,
+                "messages": messages,
+                "include_in_docs": include_in_docs,
             }
             return wrapper
 

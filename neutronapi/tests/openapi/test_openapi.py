@@ -93,6 +93,67 @@ class ExcludeEndpointAPI(API):
         return await self.response({"private": True})
 
 
+class WebSocketDocsAPI(API):
+    resource = "/v1/socket"
+    name = "socket"
+
+    @API.endpoint("/<int:item_id>", methods=["GET"], name="retrieve")
+    async def retrieve(self, scope, receive, send, item_id=None, **kwargs):
+        return await self.response({"id": item_id})
+
+    @API.websocket(
+        "/<int:item_id>",
+        summary="Connect to socket item",
+        description="Streams live updates for a socket item.",
+        tags=["Socket"],
+        parameters=[
+            {
+                "name": "item_id",
+                "in": "path",
+                "required": True,
+                "schema": {"type": "integer"},
+            },
+            {
+                "name": "events",
+                "in": "query",
+                "required": False,
+                "schema": {"type": "string"},
+            },
+        ],
+        messages={
+            "receive": {
+                "type": "object",
+                "properties": {"type": {"type": "string"}},
+            }
+        },
+    )
+    async def connect(self, scope, receive, send, item_id=None, **kwargs):
+        return None
+
+
+class HiddenWebSocketAPI(API):
+    resource = "/v1/ws-hidden"
+    name = "ws-hidden"
+    hidden = True
+
+    @API.websocket("/", summary="Hidden websocket")
+    async def connect(self, scope, receive, send, **kwargs):
+        return None
+
+
+class MixedVisibilityWebSocketAPI(API):
+    resource = "/v1/ws-mixed"
+    name = "ws-mixed"
+
+    @API.websocket("/public", summary="Public websocket")
+    async def public(self, scope, receive, send, **kwargs):
+        return None
+
+    @API.websocket("/private", summary="Private websocket", include_in_docs=False)
+    async def private(self, scope, receive, send, **kwargs):
+        return None
+
+
 class MetadataAPI(API):
     resource = "/v1/meta"
     name = "meta"
@@ -467,6 +528,42 @@ class TestOpenAPI(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("/v1/health/", spec2["paths"])
         self.assertIn("/v1/users/", spec2["paths"])  # List endpoint should remain
         self.assertNotIn("/v1/users/{user_id}", spec2["paths"])  # Detail endpoint excluded
+
+    async def test_websocket_docs_share_path_item_with_http(self):
+        """WebSocket docs should be emitted on the same path item as HTTP routes."""
+        gen = OpenAPIGenerator(title="WebSocket", version="1.0.0")
+        spec = await gen.generate_from_api(WebSocketDocsAPI())
+
+        path_item = spec["paths"]["/v1/socket/{item_id}"]
+
+        self.assertIn("get", path_item)
+        self.assertIn("x-layerbrain-websocket", path_item)
+
+        websocket = path_item["x-layerbrain-websocket"]
+        self.assertEqual(websocket["summary"], "Connect to socket item")
+        self.assertEqual(websocket["tags"], ["Socket"])
+        self.assertEqual(websocket["parameters"][0]["name"], "item_id")
+        self.assertIn("messages", websocket)
+
+    async def test_hidden_websocket_api_excluded_by_default(self):
+        """Hidden APIs should exclude websocket docs unless include_all is enabled."""
+        gen = OpenAPIGenerator(title="Hidden WS", version="1.0.0")
+        spec = await gen.generate(source={"hidden": HiddenWebSocketAPI()})
+        self.assertNotIn("/v1/ws-hidden/", spec["paths"])
+
+        gen_all = OpenAPIGenerator(title="Hidden WS All", version="1.0.0", include_all=True)
+        spec_all = await gen_all.generate(source={"hidden": HiddenWebSocketAPI()})
+        self.assertIn("/v1/ws-hidden/", spec_all["paths"])
+        self.assertIn("x-layerbrain-websocket", spec_all["paths"]["/v1/ws-hidden/"])
+
+    async def test_include_in_docs_false_excludes_websocket_route(self):
+        """Per-route websocket include_in_docs should hide only that route."""
+        gen = OpenAPIGenerator(title="Mixed WS", version="1.0.0")
+        spec = await gen.generate(source={"mixed": MixedVisibilityWebSocketAPI()})
+
+        self.assertIn("/v1/ws-mixed/public", spec["paths"])
+        self.assertIn("x-layerbrain-websocket", spec["paths"]["/v1/ws-mixed/public"])
+        self.assertNotIn("/v1/ws-mixed/private", spec["paths"])
 
     async def test_generate_all_endpoints_convenience_function(self):
         """Test the generate_all_endpoints_openapi convenience function"""

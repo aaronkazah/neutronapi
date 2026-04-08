@@ -161,6 +161,46 @@ class TestWebSocketRouting(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(messages[0]["type"], "http.response.start")
         self.assertEqual(messages[0]["status"], 200)
 
+    async def test_http_and_websocket_can_share_same_path(self):
+        """A single resource path can expose HTTP and WebSocket handlers."""
+
+        class SharedAPI(API):
+            resource = "/shared"
+            name = "shared"
+
+            @API.endpoint("/<str:item_id>", methods=["GET"], name="retrieve")
+            async def retrieve(self, scope, receive, send, item_id=None, **kwargs):
+                return await self.response({"id": item_id})
+
+            @API.websocket("/<str:item_id>")
+            async def connect(self, scope, receive, send, item_id=None, **kwargs):
+                await send({"type": "websocket.accept"})
+                await send({"type": "websocket.send", "text": item_id})
+                await send({"type": "websocket.close", "code": 1000})
+
+        app = Application(apis=[SharedAPI()])
+
+        http_scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/shared/item-123",
+            "query_string": b"",
+            "headers": [],
+        }
+        ws_scope = {
+            "type": "websocket",
+            "path": "/shared/item-123",
+            "query_string": b"",
+            "headers": [],
+        }
+
+        http_messages = await call_http(app, http_scope)
+        ws_messages = await call_websocket(app, ws_scope)
+
+        self.assertEqual(http_messages[0]["status"], 200)
+        self.assertEqual(ws_messages[0]["type"], "websocket.accept")
+        self.assertEqual(ws_messages[1]["text"], "item-123")
+
 
 if __name__ == "__main__":
     unittest.main()
