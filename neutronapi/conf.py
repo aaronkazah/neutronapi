@@ -174,7 +174,23 @@ class LazySettings:
         self._signature: Optional[tuple[str, str]] = None
 
     def _current_signature(self) -> tuple[str, str]:
-        return (os.getcwd(), _settings_module_name())
+        try:
+            cwd = os.getcwd()
+        except FileNotFoundError:
+            # The process's cwd was removed out from under us. This happens
+            # on deploy: systemd starts the service with
+            # WorkingDirectory=/opt/<app>/current (a symlink), chdir resolves
+            # to the real release dir, and a subsequent deploy that rewrites
+            # that release path (e.g. `rm -rf <release> && mkdir <release>
+            # && tar -xzf`) leaves the still-running worker pointing at a
+            # deleted inode until systemd swaps it out. Every request after
+            # that used to 500 because settings re-resolved on each call.
+            # Fall back to the last known signature; settings don't depend
+            # on cwd being valid at request time.
+            if self._signature is not None:
+                return self._signature
+            cwd = "<cwd-unavailable>"
+        return (cwd, _settings_module_name())
 
     def _setup(self, *, force: bool = False) -> Settings:
         signature = self._current_signature()
