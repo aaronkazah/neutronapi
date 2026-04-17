@@ -2,7 +2,7 @@
 
 from importlib import import_module
 
-__version__ = "0.6.3"
+__version__ = "0.6.6"
 
 _EXPORTS = {
     "API": ("neutronapi.base", "API"),

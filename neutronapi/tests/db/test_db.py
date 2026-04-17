@@ -6,11 +6,13 @@ import unittest
 import tempfile
 import os
 from datetime import datetime
+from unittest.mock import AsyncMock, patch
 
 from neutronapi.db import setup_databases, get_databases, shutdown_all_connections
 from neutronapi.db.models import Model
 from neutronapi.db.fields import CharField, IntegerField, DateTimeField, JSONField, BooleanField, DecimalField
 from neutronapi.db.migrations import MigrationManager, CreateModel
+from neutronapi.db.providers.postgres import PostgreSQLProvider
 
 class SampleModel(Model):
     """Test model for database operations."""
@@ -79,6 +81,65 @@ class TestDatabaseShutdown(unittest.IsolatedAsyncioTestCase):
         await shutdown_all_connections()
 
         self.assertFalse(db_manager._connections)
+
+
+class TestPostgreSQLProviderOptions(unittest.IsolatedAsyncioTestCase):
+    async def test_options_are_forwarded_to_asyncpg(self):
+        provider = PostgreSQLProvider(
+            {
+                'ENGINE': 'asyncpg',
+                'NAME': 'layerbrain',
+                'USER': 'postgres',
+                'PASSWORD': 'secret',
+                'HOST': 'db.internal',
+                'PORT': 25060,
+                'OPTIONS': {
+                    'min_pool_size': 1,
+                    'max_pool_size': 2,
+                    'command_timeout': 7,
+                    'max_inactive_connection_lifetime': 45,
+                    'max_queries': 321,
+                    'server_settings': {
+                        'application_name': 'api-layerbrain',
+                        'statement_timeout': '15000',
+                    },
+                },
+            }
+        )
+        fake_conn = AsyncMock()
+        fake_pool = AsyncMock()
+
+        with (
+            patch('asyncpg.connect', AsyncMock(return_value=fake_conn)) as connect_mock,
+            patch('asyncpg.create_pool', AsyncMock(return_value=fake_pool)) as create_pool_mock,
+        ):
+            await provider.connect()
+            await provider._get_pool()
+
+        connect_kwargs = connect_mock.await_args.kwargs
+        self.assertEqual(connect_kwargs['command_timeout'], 7.0)
+        self.assertEqual(
+            connect_kwargs['server_settings'],
+            {
+                'application_name': 'api-layerbrain',
+                'statement_timeout': '15000',
+            },
+        )
+        fake_conn.close.assert_awaited_once()
+
+        pool_kwargs = create_pool_mock.await_args.kwargs
+        self.assertEqual(pool_kwargs['min_size'], 1)
+        self.assertEqual(pool_kwargs['max_size'], 2)
+        self.assertEqual(pool_kwargs['command_timeout'], 7.0)
+        self.assertEqual(pool_kwargs['max_inactive_connection_lifetime'], 45.0)
+        self.assertEqual(pool_kwargs['max_queries'], 321)
+        self.assertEqual(
+            pool_kwargs['server_settings'],
+            {
+                'application_name': 'api-layerbrain',
+                'statement_timeout': '15000',
+            },
+        )
 
 
 class TestModelFunctionality(unittest.TestCase):

@@ -18,11 +18,13 @@ class PostgreSQLProvider(BaseProvider):
         self._pool_lock = None
         self._loop = None
         self._conn_kwargs = None
-        self._server_settings = None
+        self._pool_kwargs = None
 
     async def connect(self):
         import asyncio
         self._pool_lock = asyncio.Lock()
+        options = dict(self.config.get('OPTIONS', {}) or {})
+
         # base connection kwargs
         self._conn_kwargs = {
             'host': self.config.get('HOST', 'localhost'),
@@ -31,18 +33,26 @@ class PostgreSQLProvider(BaseProvider):
             'user': self.config.get('USER', 'postgres'),
             'password': self.config.get('PASSWORD', ''),
         }
+        if 'command_timeout' in options:
+            self._conn_kwargs['command_timeout'] = float(options['command_timeout'])
+        if 'server_settings' in options:
+            self._conn_kwargs['server_settings'] = dict(options['server_settings'])
+        elif 'SET' in options:
+            self._conn_kwargs['server_settings'] = {
+                str(k): str(v) for k, v in options['SET'].items()
+            }
         self._conn_kwargs = {k: v for k, v in self._conn_kwargs.items() if v is not None}
 
-        # Support DATABASES['default']['OPTIONS']
-        options = dict(self.config.get('OPTIONS', {}) or {})
-        # asyncpg supports server_settings to set GUCs on connect
-        if 'server_settings' in options:
-            self._server_settings = dict(options['server_settings'])
-        elif 'SET' in options:
-            # Allow shorthand {'SET': {'statement_timeout': '5s'}}
-            self._server_settings = {str(k): str(v) for k, v in options['SET'].items()}
-        else:
-            self._server_settings = None
+        self._pool_kwargs = {
+            'min_size': int(options.get('min_pool_size', 1)),
+            'max_size': int(options.get('max_pool_size', 10)),
+        }
+        if 'max_inactive_connection_lifetime' in options:
+            self._pool_kwargs['max_inactive_connection_lifetime'] = float(
+                options['max_inactive_connection_lifetime']
+            )
+        if 'max_queries' in options:
+            self._pool_kwargs['max_queries'] = int(options['max_queries'])
 
         await self._ensure_connectivity()
 
@@ -66,13 +76,8 @@ class PostgreSQLProvider(BaseProvider):
                 await self._close_pool_nolock()
             if self._pool is None:
                 create_pool_kwargs = dict(self._conn_kwargs)
-                if self._server_settings:
-                    create_pool_kwargs['server_settings'] = self._server_settings
-                # Pool size configurable via DATABASES[alias]['OPTIONS']
-                options = self.config.get('OPTIONS', {}) or {}
-                min_pool = int(options.get('min_pool_size', 1))
-                max_pool = int(options.get('max_pool_size', 10))
-                self._pool = await asyncpg.create_pool(min_size=min_pool, max_size=max_pool, **create_pool_kwargs)
+                create_pool_kwargs.update(self._pool_kwargs or {})
+                self._pool = await asyncpg.create_pool(**create_pool_kwargs)
                 self._loop = loop
             return self._pool
 
