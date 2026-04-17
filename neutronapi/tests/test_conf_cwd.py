@@ -1,7 +1,7 @@
 """Regression: LazySettings must not raise when the process cwd is removed.
 
 Prod 2026-04-17 repro: systemd starts api.service with
-`WorkingDirectory=/opt/layerbrain/current` (a symlink). `chdir` resolves
+`WorkingDirectory=/opt/service/current` (a symlink). `chdir` resolves
 the symlink at service start, so the process's real cwd is the release
 directory. A subsequent deploy that overwrites that release directory
 (`rm -rf <release> && mkdir <release> && tar -xzf ...`) leaves the

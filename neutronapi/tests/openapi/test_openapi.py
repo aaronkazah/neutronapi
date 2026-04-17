@@ -537,9 +537,9 @@ class TestOpenAPI(unittest.IsolatedAsyncioTestCase):
         path_item = spec["paths"]["/v1/socket/{item_id}"]
 
         self.assertIn("get", path_item)
-        self.assertIn("x-layerbrain-websocket", path_item)
+        self.assertIn("x-neutronapi-websocket", path_item)
 
-        websocket = path_item["x-layerbrain-websocket"]
+        websocket = path_item["x-neutronapi-websocket"]
         self.assertEqual(websocket["summary"], "Connect to socket item")
         self.assertEqual(websocket["tags"], ["Socket"])
         self.assertEqual(websocket["parameters"][0]["name"], "item_id")
@@ -554,7 +554,7 @@ class TestOpenAPI(unittest.IsolatedAsyncioTestCase):
         gen_all = OpenAPIGenerator(title="Hidden WS All", version="1.0.0", include_all=True)
         spec_all = await gen_all.generate(source={"hidden": HiddenWebSocketAPI()})
         self.assertIn("/v1/ws-hidden/", spec_all["paths"])
-        self.assertIn("x-layerbrain-websocket", spec_all["paths"]["/v1/ws-hidden/"])
+        self.assertIn("x-neutronapi-websocket", spec_all["paths"]["/v1/ws-hidden/"])
 
     async def test_include_in_docs_false_excludes_websocket_route(self):
         """Per-route websocket include_in_docs should hide only that route."""
@@ -562,7 +562,7 @@ class TestOpenAPI(unittest.IsolatedAsyncioTestCase):
         spec = await gen.generate(source={"mixed": MixedVisibilityWebSocketAPI()})
 
         self.assertIn("/v1/ws-mixed/public", spec["paths"])
-        self.assertIn("x-layerbrain-websocket", spec["paths"]["/v1/ws-mixed/public"])
+        self.assertIn("x-neutronapi-websocket", spec["paths"]["/v1/ws-mixed/public"])
         self.assertNotIn("/v1/ws-mixed/private", spec["paths"])
 
     async def test_generate_all_endpoints_convenience_function(self):

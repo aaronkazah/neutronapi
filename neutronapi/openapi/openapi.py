@@ -372,7 +372,7 @@ class OpenAPIGenerator:
                 effective_auth
             )
 
-        self.spec["paths"][openapi_path]["x-layerbrain-websocket"] = operation
+        self.spec["paths"][openapi_path]["x-neutronapi-websocket"] = operation
 
     async def _process_route(
         self,

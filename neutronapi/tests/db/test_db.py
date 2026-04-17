@@ -88,7 +88,7 @@ class TestPostgreSQLProviderOptions(unittest.IsolatedAsyncioTestCase):
         provider = PostgreSQLProvider(
             {
                 'ENGINE': 'asyncpg',
-                'NAME': 'layerbrain',
+                'NAME': 'appdb',
                 'USER': 'postgres',
                 'PASSWORD': 'secret',
                 'HOST': 'db.internal',
@@ -100,7 +100,7 @@ class TestPostgreSQLProviderOptions(unittest.IsolatedAsyncioTestCase):
                     'max_inactive_connection_lifetime': 45,
                     'max_queries': 321,
                     'server_settings': {
-                        'application_name': 'api-layerbrain',
+                        'application_name': 'service-api',
                         'statement_timeout': '15000',
                     },
                 },
@@ -121,7 +121,7 @@ class TestPostgreSQLProviderOptions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             connect_kwargs['server_settings'],
             {
-                'application_name': 'api-layerbrain',
+                'application_name': 'service-api',
                 'statement_timeout': '15000',
             },
         )
@@ -136,7 +136,7 @@ class TestPostgreSQLProviderOptions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             pool_kwargs['server_settings'],
             {
-                'application_name': 'api-layerbrain',
+                'application_name': 'service-api',
                 'statement_timeout': '15000',
             },
         )
