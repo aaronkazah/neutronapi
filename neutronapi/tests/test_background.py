@@ -327,3 +327,99 @@ class TestBackgroundIntegration(unittest.IsolatedAsyncioTestCase):
         # But after _execute_task the eviction runs — test via the method
         # For now just verify the param is stored
         self.assertEqual(background.max_results, 3)
+
+
+class FailingTask(Task):
+    """Task that raises on every run — regression fixture for the tight
+    retry-loop bug where a failing recurring task never got its next_run
+    advanced and was re-picked every poll interval."""
+
+    def __init__(self, name, frequency, counter, interval=None, priority=TaskPriority.NORMAL):
+        self.name = name
+        self.frequency = frequency
+        self.priority = priority
+        self.interval = interval
+        self.counter = counter
+
+    async def run(self, **kwargs):
+        self.counter['count'] += 1
+        raise RuntimeError("simulated failure")
+
+
+class TestFailingTaskRescheduling(unittest.IsolatedAsyncioTestCase):
+    async def test_failing_recurring_task_does_not_tight_loop(self):
+        """A recurring task that raises must still have next_run advanced so it
+        runs on its cadence — not every poll_interval. Regression for the
+        2026-04-17 prod incident where DB connection exhaustion caused the
+        heartbeat task to single-fire and never reschedule."""
+        from neutronapi.background import Background
+
+        counter = {'count': 0}
+        task = FailingTask("always_fails", TaskFrequency.MINUTELY, counter, interval=1)
+
+        app = Application(
+            apis={"dummy": DummyAPI()},
+            tasks={"always_fails": task},
+        )
+        # Drop the poll interval so we can observe several polls in a short test.
+        app.background.poll_interval = 0.05
+
+        for fn in app.on_startup:
+            await fn()
+
+        # 1.5s at interval=1s should yield exactly one or two runs.
+        # Bug behavior: count would explode (poll_interval=0.05 → ~30 runs).
+        await asyncio.sleep(1.5)
+
+        for fn in app.on_shutdown:
+            await fn()
+
+        self.assertGreaterEqual(counter['count'], 1, "Failing task must run at least once")
+        self.assertLessEqual(
+            counter['count'],
+            3,
+            f"Failing task must respect its interval and not tight-loop; observed {counter['count']} runs",
+        )
+
+    async def test_failing_task_advances_next_run(self):
+        """Direct unit test on _execute_task: even if the task raises, next_run
+        must move forward past `now`."""
+        from neutronapi.background import Background
+
+        background = Background()
+        counter = {'count': 0}
+        task = FailingTask("unit_failing", TaskFrequency.MINUTELY, counter, interval=30)
+        task_id = background.register_task(task)
+        task_config = background.tasks[task_id]
+        # Seed next_run into the past so the scheduler would pick it up.
+        task_config.next_run = datetime.now(timezone.utc)
+        task_config.last_run = None
+
+        result = await background._execute_task(task_config)
+
+        self.assertFalse(result.success)
+        self.assertIsNotNone(result.error)
+        self.assertIsNotNone(task_config.last_run, "last_run must be set even on failure")
+        self.assertIsNotNone(task_config.next_run, "next_run must be set even on failure")
+        self.assertGreater(
+            task_config.next_run,
+            datetime.now(timezone.utc),
+            "next_run must move into the future after a failure",
+        )
+
+    async def test_failing_once_task_disables_itself(self):
+        """A ONCE task that fails must still be disabled, not retried forever."""
+        from neutronapi.background import Background
+
+        background = Background()
+        counter = {'count': 0}
+        task = FailingTask("once_failing", TaskFrequency.ONCE, counter)
+        task_id = background.register_task(task)
+        task_config = background.tasks[task_id]
+        task_config.next_run = datetime.now(timezone.utc)
+
+        result = await background._execute_task(task_config)
+
+        self.assertFalse(result.success)
+        self.assertFalse(task_config.enabled, "Failing ONCE task must be disabled to prevent retries")
+        self.assertIsNone(task_config.next_run, "ONCE task next_run must be cleared after failure")

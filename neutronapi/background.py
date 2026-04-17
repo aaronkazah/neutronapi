@@ -232,22 +232,37 @@ class Background:
             result.result = actual_result
             result.success = True
 
-            if task.frequency != TaskFrequency.ONCE:
-                task.last_run = datetime.now(timezone.utc)
-                task.next_run = self._calculate_next_run(task.frequency, task.interval)
-                self.logger.info(
-                    f"Task {task.name} completed. Next run at {task.next_run}"
-                )
-            else:
-                task.enabled = False
-                task.next_run = None
-                self.logger.info(f"Task {task.name} was one-time only, disabled")
-
         except Exception as e:
             self.logger.error(
                 f"Error executing task {task.name}: {str(e)}", exc_info=True
             )
             result.error = e
+
+        finally:
+            # Always advance the schedule — even on failure — otherwise a failing
+            # recurring task stays with next_run in the past and gets picked up
+            # every poll_interval, creating a tight retry loop that starves other
+            # tasks and amplifies transient failures (e.g. DB connection storms).
+            task.last_run = datetime.now(timezone.utc)
+            if task.frequency != TaskFrequency.ONCE:
+                task.next_run = self._calculate_next_run(task.frequency, task.interval)
+                if result.success:
+                    self.logger.info(
+                        f"Task {task.name} completed. Next run at {task.next_run}"
+                    )
+                else:
+                    self.logger.warning(
+                        f"Task {task.name} failed; rescheduled next run at {task.next_run}"
+                    )
+            else:
+                task.enabled = False
+                task.next_run = None
+                if result.success:
+                    self.logger.info(f"Task {task.name} was one-time only, disabled")
+                else:
+                    self.logger.warning(
+                        f"One-time task {task.name} failed; disabled without retry"
+                    )
 
         result.end_time = datetime.now(timezone.utc)
         self._results[task.task_id] = result
