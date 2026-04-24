@@ -485,6 +485,236 @@ class QuerySet(Generic[T]):
         await instance.save(create=True, using=self._db_alias)
         return instance
 
+    def _pk_name(self) -> str:
+        pk_fields = [
+            name for name, f in self._model_class._neutronapi_fields_.items()
+            if getattr(f, 'primary_key', False)
+        ]
+        if len(pk_fields) != 1:
+            raise ValueError(
+                f"Bulk operations require exactly one primary key on {self._model_class.__name__}"
+            )
+        return pk_fields[0]
+
+    @staticmethod
+    def _chunks(items, size):
+        for i in range(0, len(items), size):
+            yield items[i:i + size]
+
+    async def bulk_create(
+        self,
+        objs,
+        *,
+        batch_size: int = 500,
+        ignore_conflicts: bool = False,
+    ):
+        """Insert ``objs`` in chunks of ``batch_size`` as single multi-row INSERTs.
+
+        Runs the same auto-PK and value-coercion path as ``Model.save(create=True)``.
+
+        - ``ignore_conflicts=True`` emits ``ON CONFLICT DO NOTHING`` (both dialects).
+        - ``ignore_conflicts=False`` preserves the upsert behavior of ``save()``:
+          ``ON CONFLICT (<pk>) DO UPDATE SET col = EXCLUDED.col, ...``.
+
+        Empty ``objs`` returns ``[]`` without touching the database.
+        """
+        if not objs:
+            return []
+
+        provider = await self._get_provider()
+        is_pg = not self._is_sqlite
+        pk_name = self._pk_name()
+        fields = self._model_class._neutronapi_fields_
+
+        columns: list[str] = []
+        col_quoted: list[str] = []
+        for fname, field in fields.items():
+            db_col = getattr(field, 'db_column', None) or fname
+            columns.append(fname)
+            col_quoted.append(f'"{db_col}"')
+
+        pk_quoted = f'"{pk_name}"'
+
+        if ignore_conflicts:
+            conflict_clause = " ON CONFLICT DO NOTHING"
+        else:
+            suffix = "EXCLUDED" if is_pg else "excluded"
+            update_cols = [
+                f"{col} = {suffix}.{col}" for col in col_quoted if col != pk_quoted
+            ]
+            conflict_prefix = f"ON CONFLICT ({pk_quoted})" if is_pg else f"ON CONFLICT({pk_quoted})"
+            if update_cols:
+                conflict_clause = f" {conflict_prefix} DO UPDATE SET {', '.join(update_cols)}"
+            else:
+                conflict_clause = f" {conflict_prefix} DO NOTHING"
+
+        cols_per_row = len(columns)
+
+        for chunk in self._chunks(objs, batch_size):
+            for obj in chunk:
+                obj._ensure_auto_pk()
+
+            params: list = []
+            row_placeholders: list[str] = []
+            if is_pg:
+                n = 1
+                for obj in chunk:
+                    row = []
+                    for fname in columns:
+                        field = fields[fname]
+                        params.append(obj._coerce_field_for_insert(fname, field, is_pg))
+                        row.append(f"${n}")
+                        n += 1
+                    row_placeholders.append(f"({', '.join(row)})")
+            else:
+                placeholder_row = "(" + ", ".join(["?"] * cols_per_row) + ")"
+                for obj in chunk:
+                    for fname in columns:
+                        field = fields[fname]
+                        params.append(obj._coerce_field_for_insert(fname, field, is_pg))
+                    row_placeholders.append(placeholder_row)
+
+            sql = (
+                f"INSERT INTO {self.table} ({', '.join(col_quoted)}) "
+                f"VALUES {', '.join(row_placeholders)}"
+                f"{conflict_clause}"
+            )
+            await provider.execute(sql, params if is_pg else tuple(params))
+
+        for obj in objs:
+            obj.pk = getattr(obj, pk_name, None)
+        return objs
+
+    async def bulk_update(
+        self,
+        objs,
+        fields: list,
+        *,
+        batch_size: int = 500,
+    ) -> int:
+        """Update ``fields`` on each ``obj`` (matched by PK) in chunks.
+
+        Emits one ``UPDATE <table> SET f1 = CASE pk WHEN ? THEN ? ... END, ...
+        WHERE pk IN (?, ?, ...)`` per batch.
+
+        Rejects an empty ``fields`` list. Cannot update the primary key column.
+        Empty ``objs`` returns ``0``.
+        """
+        if not fields:
+            raise ValueError("bulk_update requires at least one field")
+        if not objs:
+            return 0
+
+        provider = await self._get_provider()
+        is_pg = not self._is_sqlite
+        pk_name = self._pk_name()
+        model_fields = self._model_class._neutronapi_fields_
+
+        for fname in fields:
+            if fname == pk_name:
+                raise ValueError(f"bulk_update cannot update the primary key '{pk_name}'")
+            if fname not in model_fields:
+                raise ValueError(
+                    f"bulk_update: unknown field '{fname}' on {self._model_class.__name__}"
+                )
+
+        pk_quoted = f'"{pk_name}"'
+        total = 0
+
+        for chunk in self._chunks(objs, batch_size):
+            params: list = []
+            if is_pg:
+                n = 1
+                set_parts: list[str] = []
+                for fname in fields:
+                    field = model_fields[fname]
+                    db_col = getattr(field, 'db_column', None) or fname
+                    cases = []
+                    for obj in chunk:
+                        pk_val = getattr(obj, pk_name)
+                        val = obj._coerce_field_for_insert(fname, field, is_pg)
+                        cases.append(f"WHEN ${n} THEN ${n + 1}")
+                        params.append(pk_val)
+                        params.append(val)
+                        n += 2
+                    set_parts.append(f'"{db_col}" = CASE {pk_quoted} {" ".join(cases)} END')
+                in_placeholders = []
+                for obj in chunk:
+                    params.append(getattr(obj, pk_name))
+                    in_placeholders.append(f"${n}")
+                    n += 1
+                sql = (
+                    f"UPDATE {self.table} SET {', '.join(set_parts)} "
+                    f"WHERE {pk_quoted} IN ({', '.join(in_placeholders)})"
+                )
+                await provider.execute(sql, params)
+            else:
+                set_parts = []
+                for fname in fields:
+                    field = model_fields[fname]
+                    db_col = getattr(field, 'db_column', None) or fname
+                    cases = []
+                    for obj in chunk:
+                        pk_val = getattr(obj, pk_name)
+                        val = obj._coerce_field_for_insert(fname, field, is_pg)
+                        cases.append("WHEN ? THEN ?")
+                        params.append(pk_val)
+                        params.append(val)
+                    set_parts.append(f'"{db_col}" = CASE {pk_quoted} {" ".join(cases)} END')
+                in_placeholders = ["?"] * len(chunk)
+                for obj in chunk:
+                    params.append(getattr(obj, pk_name))
+                sql = (
+                    f"UPDATE {self.table} SET {', '.join(set_parts)} "
+                    f"WHERE {pk_quoted} IN ({', '.join(in_placeholders)})"
+                )
+                await provider.execute(sql, tuple(params))
+            total += len(chunk)
+
+        return total
+
+    async def bulk_delete(
+        self,
+        objs_or_pks,
+        *,
+        batch_size: int = 500,
+    ) -> int:
+        """Delete rows by PK in chunks.
+
+        Accepts either a list of model instances or a list of raw PK values
+        (detected per-item via ``isinstance(item, Model)``). Emits one
+        ``DELETE FROM <table> WHERE pk IN (?, ?, ..., ?)`` per batch.
+
+        Empty list returns ``0``.
+        """
+        if not objs_or_pks:
+            return 0
+
+        from .models import Model as _Model
+
+        provider = await self._get_provider()
+        is_pg = not self._is_sqlite
+        pk_name = self._pk_name()
+        pk_quoted = f'"{pk_name}"'
+
+        pks = [
+            getattr(item, pk_name) if isinstance(item, _Model) else item
+            for item in objs_or_pks
+        ]
+
+        total = 0
+        for chunk in self._chunks(pks, batch_size):
+            if is_pg:
+                placeholders = ", ".join(f"${i + 1}" for i in range(len(chunk)))
+                sql = f"DELETE FROM {self.table} WHERE {pk_quoted} IN ({placeholders})"
+                await provider.execute(sql, list(chunk))
+            else:
+                placeholders = ", ".join(["?"] * len(chunk))
+                sql = f"DELETE FROM {self.table} WHERE {pk_quoted} IN ({placeholders})"
+                await provider.execute(sql, tuple(chunk))
+            total += len(chunk)
+
+        return total
 
     async def update(self, **kwargs) -> int:
         if not kwargs:

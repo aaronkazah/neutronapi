@@ -110,6 +110,47 @@ class Model(metaclass=ModelBase):
             return value.value
         return value
 
+    def _coerce_field_for_insert(self, fname: str, field: 'BaseField', is_pg: bool) -> Any:
+        """Apply default / enum / datetime / JSON coercion for a single field value.
+
+        Shared by ``save(create=True)``, ``save(create=False)``, and
+        ``QuerySet.bulk_create`` / ``QuerySet.bulk_update`` so a model's on-disk
+        representation is identical regardless of write path.
+        """
+        val = getattr(self, fname, None)
+        if val is None and getattr(field, 'default', None) is not None:
+            val = field.default() if callable(field.default) else field.default
+        val = self._convert_enum_value(val)
+        if isinstance(val, datetime.datetime) and not is_pg:
+            val = val.isoformat()
+        if 'JSONField' in field.__class__.__name__ and isinstance(val, (dict, list)):
+            val = json_dumps_text(val)
+        return val
+
+    def _ensure_auto_pk(self) -> None:
+        """Auto-generate a time-sortable ID for a CharField primary key if unset.
+
+        Mirrors the logic that lives inline in ``save(create=True)`` so bulk
+        insert paths produce identical PKs. Silent on errors to match the
+        existing ``save()`` contract.
+        """
+        pk_fields = [
+            name for name, f in self._neutronapi_fields_.items()
+            if getattr(f, 'primary_key', False)
+        ]
+        if len(pk_fields) != 1:
+            return
+        pk_name = pk_fields[0]
+        if getattr(self, pk_name, None) not in (None, ""):
+            return
+        try:
+            pk_field = self._neutronapi_fields_[pk_name]
+            if isinstance(pk_field, CharField):
+                from ..utils.ids import generate_time_sortable_id
+                setattr(self, pk_name, generate_time_sortable_id())
+        except Exception:
+            pass
+
     @classmethod
     def describe(cls) -> Dict[str, Any]:
         return {
@@ -211,19 +252,7 @@ class Model(metaclass=ModelBase):
             create = self.pk is None
 
         if create:
-            # Auto-generate a primary key value if appropriate (single PK, missing value).
-            try:
-                if pk_name is not None:
-                    pk_field = self._neutronapi_fields_[pk_name]
-                    if getattr(self, pk_name, None) in (None, ""):
-                        from .fields import CharField  # localized import to avoid cycles
-                        if isinstance(pk_field, CharField):
-                            from ..utils.ids import generate_time_sortable_id
-                            setattr(self, pk_name, generate_time_sortable_id())
-                        # For non-CharField PKs, defer to user-configured DB defaults.
-            except Exception:
-                # Never allow PK generation logic to crash save(); fall through to normal flow.
-                pass
+            self._ensure_auto_pk()
 
         if create:
             # Prepare columns/values for INSERT
@@ -231,17 +260,7 @@ class Model(metaclass=ModelBase):
             vals = []
             for fname, field in self._neutronapi_fields_.items():
                 db_col = getattr(field, 'db_column', None) or fname
-                val = getattr(self, fname, None)
-                if val is None and getattr(field, 'default', None) is not None:
-                    val = field.default() if callable(field.default) else field.default
-                # Convert enum to value
-                val = self._convert_enum_value(val)
-                if isinstance(val, datetime.datetime) and not is_pg:
-                    val = val.isoformat()
-                # Serialize JSON fields
-                if hasattr(field, '__class__') and 'JSONField' in field.__class__.__name__:
-                    if isinstance(val, (dict, list)):
-                        val = json_dumps_text(val)
+                val = self._coerce_field_for_insert(fname, field, is_pg)
                 cols.append(self._quote(db_col))
                 vals.append(val)
 
@@ -280,17 +299,7 @@ class Model(metaclass=ModelBase):
             if fname == pk_name:
                 continue  # don't update the primary key
             db_col = getattr(field, 'db_column', None) or fname
-            val = getattr(self, fname, None)
-            if val is None and getattr(field, 'default', None) is not None:
-                val = field.default() if callable(field.default) else field.default
-            # Convert enum to value
-            val = self._convert_enum_value(val)
-            if isinstance(val, datetime.datetime) and not is_pg:
-                val = val.isoformat()
-            # Serialize JSON fields
-            if hasattr(field, '__class__') and 'JSONField' in field.__class__.__name__:
-                if isinstance(val, (dict, list)):
-                    val = json_dumps_text(val)
+            val = self._coerce_field_for_insert(fname, field, is_pg)
             placeholder = f"${index}" if is_pg else "?"
             set_cols.append(f"{self._quote(db_col)} = {placeholder}")
             params.append(val)
